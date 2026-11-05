@@ -337,9 +337,8 @@
           return;
         }
         this.updateUiInfo(item);
-        // Release the previous native surface immediately; do not leave the old
-        // stream visible while the new viewport waits for its final layout pass.
-        window.NativePlayback.stop();
+        // The native bridge owns player replacement and stops the previous stream
+        // exactly once, after the new viewport bounds have been validated.
         // The preview host is a dedicated, non-shrinking layout slot. Still wait
         // for WebView layout to publish real bounds; transient zero-size frames are
         // retried instead of being mistaken for a stream/player failure.
@@ -348,6 +347,7 @@
           if (playToken !== this.pendingPlayToken || this.currentItem !== item) return;
           const viewport = this.viewport;
           if (!viewport || !viewport.isConnected) {
+            if (window.NativePlayback && typeof window.NativePlayback.stop === 'function') window.NativePlayback.stop();
             this.showError('تعذر تحديد مساحة عرض الفيديو.');
             return;
           }
@@ -370,6 +370,7 @@
                 display: window.getComputedStyle(viewport.parentElement).display
               } : null
             }));
+            if (window.NativePlayback && typeof window.NativePlayback.stop === 'function') window.NativePlayback.stop();
             this.showError('تعذر تجهيز مساحة معاينة الفيديو. أعد المحاولة.');
             return;
           }
