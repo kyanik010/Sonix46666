@@ -363,7 +363,7 @@
   }
   async function applyOnlineSubtitle(index,button) {
     const entry = subtitleResults[index];
-    if (!entry || !window.NativePlayback || !window.NativePlayback.applySubtitle) {
+    if (!entry || !window.NativePlayback || !window.NativePlayback.applySubtitleAsync) {
       if (typeof showToast === 'function') showToast('تطبيق الترجمة غير متاح');
       return;
     }
