@@ -885,6 +885,20 @@ class MainActivity : ComponentActivity() {
 
     class WebAppInterface(private val activity: MainActivity) {
         @android.webkit.JavascriptInterface
+        fun openExternalUrl(rawUrl: String) {
+            activity.runOnUiThread {
+                try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    if (uri.scheme == "https" || uri.scheme == "http") {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    }
+                } catch (error: Exception) {
+                    android.util.Log.w("SONIXAddons", "Unable to open addon configuration URL", error)
+                }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
         fun closeApp() {
             activity.runOnUiThread {
                 activity.finish()
