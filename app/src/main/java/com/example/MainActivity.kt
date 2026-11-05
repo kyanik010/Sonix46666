@@ -465,6 +465,10 @@ class MainActivity : ComponentActivity() {
         fun clearSubtitle() {
             runOnUiThread {
                 activeSubtitleFile = null
+                nativePlayer?.let { player ->
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                }
                 rebuildCurrentMediaItem(null)
             }
         }
@@ -785,6 +789,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         activeSubtitleFile = file
+        nativePlayer?.let { player ->
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).build()
+        }
         rebuildCurrentMediaItem(file)
         notifyLocalSubtitleResult(true, label, "")
     }
