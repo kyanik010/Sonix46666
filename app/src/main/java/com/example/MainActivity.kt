@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
     private var nativePlayerCornerRadiusPx = 0f
     private var activeMediaUri: Uri? = null
     private var activeSubtitleFile: File? = null
+    private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
     private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
@@ -489,10 +490,11 @@ class MainActivity : ComponentActivity() {
                     "Marhey", "Rakkas", "Lemonada" -> "casual"
                     else -> "sans-serif"
                 }
+                val typeface = loadSubtitleTypeface(font) ?: Typeface.create(family, Typeface.BOLD)
                 subtitleView.setApplyEmbeddedStyles(false)
                 subtitleView.setStyle(CaptionStyleCompat(
                     foreground, backgroundColor, android.graphics.Color.TRANSPARENT,
-                    edgeType, android.graphics.Color.BLACK, Typeface.create(family, Typeface.BOLD)
+                    edgeType, android.graphics.Color.BLACK, typeface
                 ))
                 val textSize = size.toFloatOrNull()?.coerceIn(14f, 42f) ?: 24f
                 subtitleView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
@@ -742,6 +744,39 @@ class MainActivity : ComponentActivity() {
             player.release()
         }
         secondaryAudioPlayer = null
+    }
+
+    private fun loadSubtitleTypeface(font: String): Typeface? {
+        subtitleTypefaceCache[font]?.let { return it }
+        val source = when (font) {
+            "Reem Kufi" -> "arabic-fonts-01.b64" to "reem_kufi"
+            "Amiri" -> "arabic-fonts-01.b64" to "amiri"
+            "Aref Ruqaa" -> "arabic-fonts-02.b64" to "aref_ruqaa"
+            "Lalezar" -> "arabic-fonts-02.b64" to "lalezar"
+            "Marhey" -> "arabic-fonts-03.b64" to "marhey"
+            "Rakkas" -> "arabic-fonts-03.b64" to "rakkas"
+            "Changa" -> "arabic-fonts-04.b64" to "changa"
+            "Noto Naskh" -> "arabic-fonts-04.b64" to "noto_naskh_arabic"
+            "Lemonada" -> "arabic-fonts-05.b64" to "lemonada"
+            "Noto Kufi" -> "arabic-fonts-05.b64" to "noto_kufi_arabic"
+            else -> return null
+        }
+        return try {
+            val lines = assets.open("subtitle-fonts/" + source.first).bufferedReader().use { it.readLines() }
+            val marker = "@@" + source.second + "@@"
+            val index = lines.indexOf(marker)
+            if (index < 0 || index + 1 >= lines.size) return null
+            val bytes = android.util.Base64.decode(lines[index + 1], android.util.Base64.DEFAULT)
+            val directory = File(cacheDir, "subtitle-fonts").apply { mkdirs() }
+            val file = File(directory, source.second + ".ttf")
+            if (!file.exists() || file.length() != bytes.size.toLong()) {
+                FileOutputStream(file).use { it.write(bytes) }
+            }
+            Typeface.createFromFile(file).also { subtitleTypefaceCache[font] = it }
+        } catch (error: Exception) {
+            android.util.Log.w("SONIXSubtitle", "Could not load subtitle font $font", error)
+            null
+        }
     }
 
     private fun attachSubtitleFile(file: File, label: String) {
