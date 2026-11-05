@@ -27,6 +27,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.Executors
 import android.view.ViewGroup
 import android.view.LayoutInflater
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
     private var activeMediaUri: Uri? = null
     private var activeSubtitleFile: File? = null
     private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
+    private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
     private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
@@ -389,56 +391,64 @@ class MainActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
-        fun fetchText(rawUrl: String): String {
-            return try {
-                val uri = Uri.parse(rawUrl.trim())
-                require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الطلب غير صالح" }
-                val connection = URL(uri.toString()).openConnection() as HttpURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 12000
-                connection.readTimeout = 18000
-                connection.instanceFollowRedirects = true
-                connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
-                connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
-                try {
-                    val code = connection.responseCode
-                    if (code !in 200..299) throw IllegalStateException("HTTP $code")
-                    val bytes = connection.inputStream.use { it.readBytes() }
-                    require(bytes.size <= 4 * 1024 * 1024) { "استجابة الإضافة أكبر من الحد المسموح" }
-                    JSONObject().put("success", true)
-                        .put("body", String(bytes, Charsets.UTF_8)).toString()
-                } finally { connection.disconnect() }
-            } catch (error: Exception) {
-                JSONObject().put("success", false)
-                    .put("error", error.message ?: "تعذر الاتصال بمصدر الإضافة").toString()
+        fun fetchTextAsync(rawUrl: String, requestId: String) {
+            subtitleIoExecutor.execute {
+                val payload = try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الطلب غير صالح" }
+                    val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 12000
+                    connection.readTimeout = 18000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                    connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
+                    try {
+                        val code = connection.responseCode
+                        if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                        val bytes = connection.inputStream.use { it.readBytes() }
+                        require(bytes.size <= 4 * 1024 * 1024) { "استجابة الإضافة أكبر من الحد المسموح" }
+                        JSONObject().put("success", true).put("body", String(bytes, Charsets.UTF_8)).toString()
+                    } finally { connection.disconnect() }
+                } catch (error: Exception) {
+                    JSONObject().put("success", false).put("error", error.message ?: "تعذر الاتصال بمصدر الإضافة").toString()
+                }
+                runOnUiThread { deliverSubtitleResponse(requestId, payload) }
             }
         }
 
         @android.webkit.JavascriptInterface
-        fun applySubtitle(rawUrl: String, label: String): String {
-            return try {
-                val uri = Uri.parse(rawUrl.trim())
-                require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الترجمة غير صالح" }
-                val connection = URL(uri.toString()).openConnection() as HttpURLConnection
-                connection.connectTimeout = 15000
-                connection.readTimeout = 25000
-                connection.instanceFollowRedirects = true
-                connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
-                val bytes = try {
-                    require(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
-                    connection.inputStream.use { it.readBytes() }
-                } finally { connection.disconnect() }
-                require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
-                val ext = (uri.lastPathSegment ?: "").substringAfterLast('.', "srt").lowercase()
-                require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الترجمة غير مدعومة" }
-                val folder = File(cacheDir, "subtitles").apply { mkdirs() }
-                val file = File(folder, "online_${System.currentTimeMillis()}.$ext")
-                FileOutputStream(file).use { it.write(bytes) }
-                runOnUiThread { attachSubtitleFile(file, label.ifBlank { "Online subtitle" }) }
-                JSONObject().put("success", true).toString()
-            } catch (error: Exception) {
-                JSONObject().put("success", false)
-                    .put("error", error.message ?: "تعذر تنزيل الترجمة").toString()
+        fun applySubtitleAsync(rawUrl: String, label: String, requestId: String) {
+            subtitleIoExecutor.execute {
+                var downloaded: File? = null
+                val payload = try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الترجمة غير صالح" }
+                    val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 15000
+                    connection.readTimeout = 25000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                    val bytes = try {
+                        require(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                        connection.inputStream.use { it.readBytes() }
+                    } finally { connection.disconnect() }
+                    require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
+                    val ext = (uri.lastPathSegment ?: "").substringAfterLast('.', "srt").lowercase()
+                    require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الترجمة غير مدعومة" }
+                    val folder = File(cacheDir, "subtitles").apply { mkdirs() }
+                    File(folder, "online_${System.currentTimeMillis()}.$ext").also { file ->
+                        FileOutputStream(file).use { it.write(bytes) }
+                        downloaded = file
+                    }
+                    JSONObject().put("success", true).toString()
+                } catch (error: Exception) {
+                    JSONObject().put("success", false).put("error", error.message ?: "تعذر تنزيل الترجمة").toString()
+                }
+                runOnUiThread {
+                    if (downloaded != null) attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false)
+                    deliverSubtitleResponse(requestId, payload)
+                }
             }
         }
 
@@ -757,6 +767,12 @@ class MainActivity : ComponentActivity() {
         secondaryAudioPlayer = null
     }
 
+    private fun deliverSubtitleResponse(requestId: String, payload: String) {
+        val js = "window.SonixSubtitles && window.SonixSubtitles.onNativeResponse(" +
+            JSONObject.quote(requestId) + "," + JSONObject.quote(payload) + ")"
+        webView?.evaluateJavascript(js, null)
+    }
+
     private fun loadSubtitleTypeface(font: String): Typeface? {
         subtitleTypefaceCache[font]?.let { return it }
         val source = when (font) {
@@ -790,7 +806,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun attachSubtitleFile(file: File, label: String) {
+    private fun attachSubtitleFile(file: File, label: String, notify: Boolean = true) {
         if (nativePlayer == null || activeMediaUri == null) {
             notifyLocalSubtitleResult(false, label, "شغّل الفيديو أولاً قبل إضافة الترجمة")
             return
@@ -801,7 +817,7 @@ class MainActivity : ComponentActivity() {
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).build()
         }
         rebuildCurrentMediaItem(file)
-        notifyLocalSubtitleResult(true, label, "")
+        if (notify) notifyLocalSubtitleResult(true, label, "")
     }
 
     private fun rebuildCurrentMediaItem(subtitleFile: File?) {
@@ -982,6 +998,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         detachExternalAudioInternal(false)
         stopNativePlayer()
+        subtitleIoExecutor.shutdownNow()
         webView?.destroy()
         webView = null
         super.onDestroy()
