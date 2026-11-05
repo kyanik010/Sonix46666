@@ -6,6 +6,7 @@ on:
       - fix/sonix-playback-preview-controls
       - fix/mobile-native-video-immersive-fullscreen
       - feature/sonix-external-audio-complete
+      - test/media3-1.11.1-current
       - feature/stremio-addons-subtitle-system
   workflow_dispatch:
 
