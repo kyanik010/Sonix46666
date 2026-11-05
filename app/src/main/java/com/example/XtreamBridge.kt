@@ -7,6 +7,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.webkit.JavascriptInterface
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
@@ -81,7 +82,9 @@ class XtreamBridge(context: Context) {
                 "get_series"
             )
             require(action in allowed) { "طلب API غير مسموح" }
-            request(credentials.server, credentials.username, credentials.password, "player_api.php", action)
+            val response = request(credentials.server, credentials.username, credentials.password, "player_api.php", action)
+            persistCatalogAction(credentials.server, credentials.username, action, response)
+            response
         } catch (error: Exception) {
             errorResult(error)
         }
@@ -103,64 +106,68 @@ class XtreamBridge(context: Context) {
     }
 
     @JavascriptInterface
-    fun saveCatalogCache(server: String, username: String, catalogJson: String): String {
+    fun loadCached(action: String): String {
         return try {
-            val normalizedServer = normalizeServer(server)
-            require(username.isNotBlank()) { "اسم المستخدم غير صالح لحفظ المحتوى" }
-            val catalog = JSONObject(catalogJson)
-            val requiredArrays = listOf(
-                "liveCategories", "liveChannels", "movieCategories",
-                "movies", "seriesCategories", "series"
-            )
-            requiredArrays.forEach { key ->
-                require(catalog.optJSONArray(key) != null) { "بيانات المزامنة غير مكتملة: $key" }
+            val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
+            val allowed = catalogActions
+            require(action in allowed) { "طلب محتوى مخزن غير مسموح" }
+            val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
+            if (!file.isFile) throw IllegalStateException("لا توجد مزامنة محفوظة")
+            val envelope = JSONObject(file.readText(Charsets.UTF_8))
+            require(envelope.optInt("version") == 1 &&
+                envelope.optBoolean("complete") &&
+                envelope.optString("server") == credentials.server &&
+                envelope.optString("username") == credentials.username) {
+                "المزامنة المحفوظة غير مكتملة أو تخص اشتراكاً آخر"
             }
-            val totalItems = listOf("liveChannels", "movies", "series")
-                .sumOf { catalog.getJSONArray(it).length() }
-            require(totalItems > 0) { "لن يتم حفظ مزامنة فارغة" }
-
-            val envelope = JSONObject()
-                .put("version", 1)
-                .put("server", normalizedServer)
-                .put("username", username.trim())
-                .put("savedAt", System.currentTimeMillis())
-                .put("catalog", catalog)
-
-            val atomicFile = AtomicFile(File(appContext.filesDir, "sonix_provider_cache_v1.json"))
-            var output: FileOutputStream? = null
-            try {
-                output = atomicFile.startWrite()
-                output.write(envelope.toString().toByteArray(Charsets.UTF_8))
-                output.fd.sync()
-                atomicFile.finishWrite(output)
-                output = null
-            } catch (error: Exception) {
-                if (output != null) atomicFile.failWrite(output)
-                throw error
-            }
-            JSONObject().put("success", true).put("saved", true).put("items", totalItems).toString()
+            val actions = envelope.optJSONObject("actions")
+                ?: throw IllegalStateException("بيانات المزامنة غير مكتملة")
+            actions.optJSONArray(action)?.toString()
+                ?: throw IllegalStateException("بيانات هذا القسم غير محفوظة")
         } catch (error: Exception) {
             errorResult(error)
         }
     }
 
-    @JavascriptInterface
-    fun loadCatalogCache(server: String, username: String): String {
-        return try {
-            val normalizedServer = normalizeServer(server)
-            val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
-            if (!file.isFile) throw IllegalStateException("لا توجد مزامنة محفوظة")
-            val envelope = JSONObject(file.readText(Charsets.UTF_8))
-            require(envelope.optInt("version") == 1) { "إصدار بيانات المزامنة غير مدعوم" }
-            require(envelope.optString("server") == normalizedServer &&
-                envelope.optString("username") == username.trim()) {
-                "بيانات المزامنة تخص اشتراكاً آخر"
-            }
-            val catalog = envelope.optJSONObject("catalog")
-                ?: throw IllegalStateException("ملف المزامنة تالف")
-            JSONObject().put("success", true).put("catalog", catalog).toString()
+    private val catalogActions = setOf(
+        "get_live_categories", "get_live_streams",
+        "get_vod_categories", "get_vod_streams",
+        "get_series_categories", "get_series"
+    )
+
+    private fun persistCatalogAction(server: String, username: String, action: String, response: String) {
+        val parsed = JSONArray(response)
+        val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
+        val atomicFile = AtomicFile(file)
+        val previous = try {
+            if (file.isFile) JSONObject(file.readText(Charsets.UTF_8)) else null
+        } catch (_: Exception) {
+            null
+        }
+        val sameAccount = previous != null &&
+            previous.optString("server") == server &&
+            previous.optString("username") == username
+        val actions = if (sameAccount) previous?.optJSONObject("actions") ?: JSONObject() else JSONObject()
+        actions.put(action, parsed)
+        val complete = catalogActions.all { actions.optJSONArray(it) != null }
+        val envelope = JSONObject()
+            .put("version", 1)
+            .put("server", server)
+            .put("username", username)
+            .put("savedAt", System.currentTimeMillis())
+            .put("complete", complete)
+            .put("actions", actions)
+
+        var output: FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            output.write(envelope.toString().toByteArray(Charsets.UTF_8))
+            output.fd.sync()
+            atomicFile.finishWrite(output)
+            output = null
         } catch (error: Exception) {
-            errorResult(error)
+            if (output != null) atomicFile.failWrite(output)
+            throw error
         }
     }
 
