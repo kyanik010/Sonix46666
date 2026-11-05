@@ -247,6 +247,15 @@
       }
 
       hidePlaybackControls() {
+        // Keep the fullscreen toolbar available behind the external-audio dialog.
+        // Otherwise its 10-second auto-hide timer can leave the close action
+        // without a visible/focusable return target on TV remotes.
+        const audioDialog = document.getElementById('modal-ext-audio');
+        if (this.isFullscreen && audioDialog && audioDialog.classList.contains('active')) {
+          if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
+          this.controlsHideTimer = null;
+          return;
+        }
         const controls = document.getElementById('player-playback-controls');
         if (controls) {
           controls.classList.remove('visible');
@@ -1010,6 +1019,9 @@
 
       modal.setAttribute('aria-hidden', 'false');
       modal.classList.add('active');
+      if (isFullscreenAudioDialog && videoPlaybackController) {
+        videoPlaybackController.showPlaybackControls();
+      }
 
       const focusDialog = () => {
         if (!modal.classList.contains('active')) return;
@@ -1047,9 +1059,12 @@
         }
       });
 
-      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen && remoteNavigator) {
-        const audioButton = document.getElementById('btn-open-ext-audio');
-        if (audioButton) remoteNavigator.focusElement(audioButton);
+      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen) {
+        videoPlaybackController.showPlaybackControls();
+        if (remoteNavigator) {
+          const audioButton = document.getElementById('btn-open-ext-audio');
+          if (audioButton) remoteNavigator.focusElement(audioButton);
+        }
       }
     }
 
