@@ -44,6 +44,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.Format
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -86,6 +87,8 @@ class MainActivity : ComponentActivity() {
     private var activeSubtitleFile: File? = null
     private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
     private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
+    private val codecDiagnosticsExecutor = Executors.newSingleThreadExecutor()
+    private var lastUhdCodecDiagnosticKey: String? = null
     private val subtitleGeneration = AtomicLong(0)
     private val subtitleActivationHandler = Handler(Looper.getMainLooper())
     private val playbackProgressHandler = Handler(Looper.getMainLooper())
@@ -469,6 +472,21 @@ class MainActivity : ComponentActivity() {
                 override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                     if (droppedFrames > 0) {
                         android.util.Log.w("SONIXPlayback", "Dropped " + droppedFrames + " video frames in " + elapsedMs + "ms")
+                    }
+                }
+
+                override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                    android.util.Log.i("SONIXPlayback", "VIDEO_DECODER name=" + decoderName + " init=" + initializationDurationMs + "ms")
+                }
+
+                override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?) {
+                    android.util.Log.i("SONIXPlayback", "VIDEO_FORMAT mime=" + format.sampleMimeType + " size=" + format.width + "x" + format.height + " fps=" + format.frameRate + " bitrate=" + format.bitrate)
+                    if (format.width >= 3840 || format.height >= 2160) {
+                        val key = (format.sampleMimeType ?: "unknown") + ":" + format.width + "x" + format.height + ":" + format.frameRate
+                        if (lastUhdCodecDiagnosticKey != key) {
+                            lastUhdCodecDiagnosticKey = key
+                            codecDiagnosticsExecutor.execute { inspectUhdCodecCapabilities(format) }
+                        }
                     }
                 }
             })
@@ -1160,6 +1178,47 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun inspectUhdCodecCapabilities(format: Format) {
+        val mimeType = format.sampleMimeType ?: return
+        val width = format.width
+        val height = format.height
+        if (width <= 0 || height <= 0) return
+        val frameRate = format.frameRate.toDouble()
+        val results = mutableListOf<String>()
+        try {
+            val codecInfos = android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos
+            for (codecInfo in codecInfos) {
+                if (codecInfo.isEncoder) continue
+                val supportedType = codecInfo.supportedTypes.firstOrNull { it.equals(mimeType, ignoreCase = true) } ?: continue
+                try {
+                    val videoCapabilities = codecInfo.getCapabilitiesForType(supportedType).videoCapabilities ?: continue
+                    val supportsFormat = if (frameRate > 0.0) {
+                        videoCapabilities.areSizeAndRateSupported(width, height, frameRate)
+                    } else {
+                        videoCapabilities.areSizeSupported(width, height)
+                    }
+                    val acceleration = if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        "hardware=" + codecInfo.isHardwareAccelerated
+                    } else {
+                        "hardware=unknown"
+                    }
+                    results += codecInfo.name + "(supports=" + supportsFormat + "," + acceleration + ")"
+                } catch (error: Exception) {
+                    android.util.Log.w("SONIXPlayback", "Could not inspect codec " + codecInfo.name, error)
+                }
+            }
+            val supportedCount = results.count { it.contains("supports=true") }
+            android.util.Log.i(
+                "SONIXPlayback",
+                "UHD_CODEC_SCAN mime=" + mimeType + " size=" + width + "x" + height +
+                    " fps=" + frameRate + " supportedDecoders=" + supportedCount +
+                    " candidates=" + results.joinToString()
+            )
+        } catch (error: Exception) {
+            android.util.Log.w("SONIXPlayback", "UHD codec capability scan failed", error)
+        }
+    }
+
     private fun resetNativePlayerForNextItem() {
         playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
         playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
@@ -1203,6 +1262,8 @@ class MainActivity : ComponentActivity() {
     private fun scheduleLiveRecovery(player: ExoPlayer, reason: String) {
         if (player !== nativePlayer || !nativePlayerActive || nativeVideoStreamType != "live") return
         if (liveRecoveryRunnable != null) return
+        webView?.evaluateJavascript(
+            "window.onNativePlaybackBuffering && window.onNativePlaybackBuffering('جارٍ إعادة الاتصال بالقناة...')", null)
         if (liveRecoveryAttempts >= 3) {
             val message = "تعذر استعادة القناة بعد 3 محاولات. " + reason
             android.util.Log.e("SONIXPlayback", message)
@@ -1388,6 +1449,7 @@ class MainActivity : ComponentActivity() {
         detachExternalAudioInternal(false)
         stopNativePlayer()
         subtitleIoExecutor.shutdownNow()
+        codecDiagnosticsExecutor.shutdownNow()
         webView?.destroy()
         webView = null
         super.onDestroy()
