@@ -296,10 +296,13 @@ class MainActivity : ComponentActivity() {
                 override fun onTracksChanged(tracks: Tracks) {
                     if (activeSubtitleFile == null || pendingSubtitleLabel.isBlank()) return
                     val playerNow = nativePlayer ?: return
+                    val expectedLabel = activeSubtitleFile?.nameWithoutExtension ?: return
                     val candidate = tracks.groups.firstNotNullOfOrNull { group ->
                         if (group.type != C.TRACK_TYPE_TEXT) return@firstNotNullOfOrNull null
-                        val index = (0 until group.length).firstOrNull { group.isTrackSupported(it) }
-                            ?: return@firstNotNullOfOrNull null
+                        val index = (0 until group.length).firstOrNull { index ->
+                            group.isTrackSupported(index) &&
+                                group.getTrackFormat(index).label.equals(expectedLabel, ignoreCase = true)
+                        } ?: return@firstNotNullOfOrNull null
                         group to index
                     } ?: return
                     val (group, trackIndex) = candidate
