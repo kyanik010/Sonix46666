@@ -993,6 +993,16 @@
       if (modalId === 'modal-settings') syncSonixSettingsControls();
       const modal = document.getElementById(modalId);
       if (modal) {
+        // Fullscreen mode portals the video viewport to <body> and hides the
+        // remaining app tree. Portal this dialog too, otherwise it stays inside
+        // a hidden ancestor and cannot appear until fullscreen is exited.
+        if (modalId === 'modal-ext-audio' && videoPlaybackController && videoPlaybackController.isFullscreen &&
+            modal.parentElement !== document.body) {
+          modal._sonixOriginalParent = modal.parentElement;
+          modal._sonixOriginalNextSibling = modal.nextSibling;
+          document.body.appendChild(modal);
+          modal.dataset.sonixFullscreenPortal = 'true';
+        }
         modal.classList.add('active');
         const firstFocusable = modal.querySelector('.focusable');
         if (firstFocusable && remoteNavigator) {
@@ -1002,7 +1012,18 @@
     }
 
     function closeAllModals() {
-      document.querySelectorAll('.modal-backdrop').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.modal-backdrop').forEach(el => {
+        el.classList.remove('active');
+        if (el.dataset.sonixFullscreenPortal === 'true' && el._sonixOriginalParent) {
+          const parent = el._sonixOriginalParent;
+          const next = el._sonixOriginalNextSibling;
+          if (next && next.parentNode === parent) parent.insertBefore(el, next);
+          else parent.appendChild(el);
+          delete el._sonixOriginalParent;
+          delete el._sonixOriginalNextSibling;
+          delete el.dataset.sonixFullscreenPortal;
+        }
+      });
     }
 
     let toastTimer = null;
