@@ -181,7 +181,7 @@
         if (this.viewport) {
           this.viewport.addEventListener('pointerdown', () => this.showPlaybackControls());
           this.viewport.addEventListener('click', (event) => {
-            if (!event.target.closest('.player-playback-controls, .exit-fullscreen-btn')) {
+            if (!event.target.closest('.player-playback-controls')) {
               this.showPlaybackControls();
             }
           });
@@ -216,19 +216,12 @@
         document.getElementById('btn-playback-fav').addEventListener('click', () => {
           if (this.currentItem) toggleFavorite(this.currentItem.id);
         });
-        const exitBtn = document.getElementById('btn-exit-fullscreen');
-        if (exitBtn) exitBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.exitFullscreen();
-        });
         if (this.viewport) {
-          this.viewport.addEventListener('dblclick', (e) => {
-            e.preventDefault();
-            this.toggleFullscreen();
-          });
           let lastTapTime = 0;
           this.viewport.addEventListener('touchend', (e) => {
-            if (e.target.closest('.control-btn') || e.target.closest('.action-btn') || e.target.closest('#btn-exit-fullscreen')) return;
+            // Toolbar taps operate their controls; only a double tap on the video
+            // surface itself may leave fullscreen.
+            if (e.target.closest('.player-playback-controls, .control-btn, .action-btn')) return;
             const now = Date.now();
             if (now - lastTapTime < 350 && now - lastTapTime > 40) {
               e.preventDefault();
@@ -508,11 +501,11 @@
         // Wait for the portal/layout transition, then resize the native surface
         // to exactly match the new viewport rectangle.
         requestAnimationFrame(() => this.syncNativeBounds());
-        const exitBtn = document.getElementById('btn-exit-fullscreen');
         if (this.isFullscreen) {
           this.showPlaybackControls();
-          showToast('تم التكبير إلى ملء الشاشة (اضغط تصغير الشاشة للخروج)');
-          if (exitBtn && remoteNavigator) remoteNavigator.focusElement(exitBtn);
+          showToast('تم التكبير إلى ملء الشاشة');
+          const firstControl = document.querySelector('#player-playback-controls .playback-control-btn');
+          if (firstControl && remoteNavigator) remoteNavigator.focusElement(firstControl);
         } else {
           showToast('تم الخروج من وضع ملء الشاشة');
         }
@@ -757,7 +750,6 @@
         const currentActiveView = document.querySelector('.view-screen.active');
         if (currentActiveView && currentActiveView.id !== 'view-home') {
           switchView('view-home');
-          showToast('العودة إلى الشاشة الرئيسية');
         } else {
           openModal('modal-power');
         }
@@ -1552,7 +1544,6 @@
       if (!item.streamUrl) { showToast('رابط التشغيل غير متوفر من الخادم'); return; }
       videoPlaybackController.loadItem(item);
       if (currentAppMode === 'live') loadLiveEpg(item);
-      showToast('تم الاختيار: ' + item.name);
     }
 
     function classifyAudioSource(name, categoryName, categoryId) {
@@ -1680,7 +1671,6 @@
       // 5. Explicit Back Button in Top Bar (Returns to Home!)
       document.getElementById('live-btn-back').addEventListener('click', () => {
         switchView('view-home');
-        showToast('العودة إلى الشاشة الرئيسية');
       });
 
       // 6. Sidebar Mode Navigation (Unified 4-column layout)
