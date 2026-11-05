@@ -76,6 +76,23 @@ class MainActivity : ComponentActivity() {
     private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
     private val subtitleGeneration = AtomicLong(0)
     private val subtitleActivationHandler = Handler(Looper.getMainLooper())
+    private val playbackProgressHandler = Handler(Looper.getMainLooper())
+    private val playbackProgressRunnable = object : Runnable {
+        override fun run() {
+            val player = nativePlayer
+            if (player != null && nativePlayerActive) {
+                val rawDuration = player.duration
+                val duration = if (rawDuration == C.TIME_UNSET || rawDuration <= 0L) -1L else rawDuration
+                val position = player.currentPosition.coerceAtLeast(0L)
+                val seekable = player.isCurrentMediaItemSeekable && duration > 0L
+                webView?.evaluateJavascript(
+                    "window.onNativePlaybackProgress && window.onNativePlaybackProgress($position, $duration, $seekable)",
+                    null
+                )
+                playbackProgressHandler.postDelayed(this, 500L)
+            }
+        }
+    }
     private var subtitleActivationTimeout: Runnable? = null
     private var pendingSubtitleRequestId: String? = null
     private var pendingSubtitleLabel = ""
@@ -367,6 +384,8 @@ class MainActivity : ComponentActivity() {
             player.setMediaItem(mediaItem)
             player.prepare()
             player.playWhenReady = true
+            playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+            playbackProgressHandler.post(playbackProgressRunnable)
         }
 
         @android.webkit.JavascriptInterface
@@ -450,6 +469,20 @@ class MainActivity : ComponentActivity() {
                 if (externalAudioActive) {
                     secondaryAudioPlayer?.seekTo(target)
                 }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun seekTo(positionMs: Long) {
+            runOnUiThread {
+                val player = nativePlayer ?: return@runOnUiThread
+                if (!player.isCurrentMediaItemSeekable) return@runOnUiThread
+                val target = positionMs.coerceAtLeast(0L).let { requested ->
+                    val duration = player.duration
+                    if (duration > 0L) requested.coerceAtMost(duration) else requested
+                }
+                player.seekTo(target)
+                if (externalAudioActive) secondaryAudioPlayer?.seekTo(target)
             }
         }
 
@@ -1042,6 +1075,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopNativePlayer() {
+        playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
         subtitleGeneration.incrementAndGet()
         finishSubtitleActivation(false, "توقف تشغيل المحتوى قبل تفعيل الترجمة")
         activeMediaUri = null
