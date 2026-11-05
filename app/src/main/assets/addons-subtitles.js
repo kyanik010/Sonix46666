@@ -76,7 +76,8 @@
       url:url.endsWith('/manifest.json') ? url : url.replace(/\/+$/,'') + '/manifest.json',
       types, resources, enabled:raw.enabled !== false,
       source:source || raw.source || 'community',
-      configurationRequired:raw.configurationRequired === true || url.includes('[config]'),
+      configurationRequired:raw.configurationRequired === true ||
+        (manifest.behaviorHints && manifest.behaviorHints.configurationRequired === true) || url.includes('/[config]/'),
       configureUrl:raw.configureUrl || ''
     };
   }
@@ -229,20 +230,43 @@
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
     return {item,isSeries,title,season:Number(item.subtitleSeason || item.season || 0),episode:Number(item.subtitleEpisode || item.episode || 0)};
   }
-  function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g,''); }
+  function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\\p{L}\\p{N}]/gu,''); }
   function resolveImdb(identity) {
     const type = identity.isSeries ? 'series' : 'movie';
-    const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(identity.title) + '.json';
-    const data = JSON.parse(nativeText(url));
-    const metas = data && Array.isArray(data.metas) ? data.metas : [];
     const target = normalizeTitle(identity.title);
-    metas.sort((a,b) => {
+    let candidates = [];
+    try {
+      const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(identity.title) + '.json';
+      const data = JSON.parse(nativeText(url));
+      candidates = data && Array.isArray(data.metas) ? data.metas : [];
+    } catch (_) {}
+    if (!candidates.some(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')))) {
+      // Match Lumen's fallback: query search-enabled catalogs exposed by installed addons.
+      installed.filter(x => x.enabled !== false).forEach(addon => {
+        try {
+          const manifest = JSON.parse(nativeText(addon.url));
+          const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
+          (Array.isArray(manifest.catalogs) ? manifest.catalogs : []).forEach(catalog => {
+            if (catalog.type !== type || !catalog.id) return;
+            const extras = Array.isArray(catalog.extra) ? catalog.extra : [];
+            if (!extras.some(extra => extra && extra.name === 'search')) return;
+            try {
+              const data = JSON.parse(nativeText(base + '/catalog/' + type + '/' +
+                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(identity.title) + '.json'));
+              if (data && Array.isArray(data.metas)) candidates.push(...data.metas);
+            } catch (_) {}
+          });
+        } catch (_) {}
+      });
+    }
+    candidates = candidates.filter(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')));
+    candidates.sort((a,b) => {
       const aa = normalizeTitle(a.name || a.title), bb = normalizeTitle(b.name || b.title);
       const score = x => x === target ? 0 : (x.includes(target) || target.includes(x) ? 1 : 2);
       return score(aa)-score(bb);
     });
-    const match = metas.find(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')));
-    if (!match) throw new Error('لم يتم العثور على معرف الفيلم أو المسلسل في Cinemeta.');
+    const match = candidates[0];
+    if (!match) throw new Error('لم يتم العثور على معرف المحتوى في Cinemeta أو كتالوجات الإضافات المثبتة.');
     const id = String(match.imdb_id || match.id);
     if (identity.isSeries && identity.season > 0 && identity.episode > 0) {
       return {type:'series',id,resourceId:id+':'+identity.season+':'+identity.episode};
@@ -379,10 +403,6 @@
   }
   function bind() {
     loadInstalled();
-    document.getElementById('btn-toggle-subtitles')?.addEventListener('click', event => {
-      event.preventDefault();
-      openSubtitleSearch();
-    });
     document.getElementById('settings-open-addons')?.addEventListener('click', openMarketplace);
     document.querySelectorAll('[data-addon-tab]').forEach(button => button.addEventListener('click', () => {
       activeTab = button.dataset.addonTab;
