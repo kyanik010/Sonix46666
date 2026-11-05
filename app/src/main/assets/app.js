@@ -573,32 +573,48 @@
       }
       setSourceChannel(channel) {
         if (!channel || !channel.id) return;
-        if (this.videoController.currentItem && String(this.videoController.currentItem.id) === String(channel.id)) { showToast('اختر قناة صوتية مختلفة عن قناة الفيديو'); return; }
-        if (!channel.streamUrl) channel.streamUrl = makeStreamUrl('live', channel.id, {container_extension:channel.containerExtension || 'ts'});
-        if (!channel.streamUrl) { showToast('رابط القناة الصوتية غير متوفر من مزود الاشتراك'); return; }
-        const videoUrl = this.videoController.currentItem && this.videoController.currentItem.streamUrl;
-        if (videoUrl && channel.streamUrl.replace(/\/$/, '') === String(videoUrl).trim().replace(/\/$/, '')) { showToast('مصدر الصوت يجب أن يكون قناة مستقلة عن الفيديو'); return; }
-        this.selectedSourceChannel = channel; this.sourceNameEl.textContent = channel.name + ' (' + channel.categoryName + ')';
-        document.querySelectorAll('.audio-picker-item').forEach(el => el.classList.toggle('active', el.dataset.channelId === String(channel.id)));
+        const currentVideo = this.videoController.currentItem;
+        // Compare stable Xtream stream IDs only. streamUrl is deliberately not
+        // used here because native playback stores the placeholder native://stream
+        // on every item, not the resolved provider URL.
+        if (currentVideo && String(currentVideo.id) === String(channel.id)) {
+          showToast('اختر قناة صوتية مختلفة عن قناة الفيديو');
+          return;
+        }
+        this.selectedSourceChannel = channel;
+        this.sourceNameEl.textContent = channel.name + ' (' + channel.categoryName + ')';
+        document.querySelectorAll('.audio-picker-item').forEach(el =>
+          el.classList.toggle('active', el.dataset.channelId === String(channel.id))
+        );
         showToast('تم اختيار ' + channel.name + ' — جارٍ تشغيل الصوت الخارجي');
-        // Selecting a source starts it immediately; the explicit start button
-        // remains available to retry or restart the selected source.
         this.startExternalAudio();
       }
       startExternalAudio() {
         const source = this.selectedSourceChannel;
-        if (!source) { showToast('يرجى اختيار قناة صوتية من beIN SPORTS أو ALWAN أولاً'); return; }
-        if (!source.streamDescriptor) source.streamDescriptor = { type: 'live', id: String(source.id), ext: source.containerExtension || 'ts' }; source.streamUrl = 'native://stream';
-        if (!source.streamUrl || !window.NativePlayback || !window.NativePlayback.attachExternalAudio) { this.setStatus('failed', 'مصدر الصوت غير متاح'); showToast('تعذر الحصول على رابط القناة الصوتية من الاشتراك'); return; }
-        if (!this.isActive) this.originalVideoMuted = !!this.videoController.isMuted;
-        this.videoController.isMuted = true; this.isActive = true; this.setStatus('connecting', 'جارٍ الاتصال...');
-        this.activeBadgeEl.classList.add('visible'); this.btnExtAudio.classList.add('is-active'); this.btnExtAudioText.textContent = 'الصوت الخارجي: ' + source.name;
-        window.NativePlayback.setExternalAudioVolume(this.volume); window.NativePlayback.setExternalAudioSyncOffset(this.delayMs);
-        if (source.streamDescriptor && window.NativePlayback.attachExternalAudioStream) {
-          window.NativePlayback.attachExternalAudioStream(String(source.streamDescriptor.id), source.streamDescriptor.ext);
-        } else {
-          window.NativePlayback.attachExternalAudio(source.streamUrl);
+        if (!source || !source.id) {
+          showToast('يرجى اختيار قناة صوتية من beIN SPORTS أو ALWAN أولاً');
+          return;
         }
+        if (!window.NativePlayback || typeof window.NativePlayback.attachExternalAudioStream !== 'function') {
+          this.setStatus('failed', 'مصدر الصوت غير متاح');
+          showToast('تعذر الحصول على رابط القناة الصوتية من الاشتراك');
+          return;
+        }
+        if (!this.isActive) this.originalVideoMuted = !!this.videoController.isMuted;
+        this.videoController.isMuted = true;
+        this.isActive = true;
+        this.setStatus('connecting', 'جارٍ الاتصال...');
+        this.activeBadgeEl.classList.add('visible');
+        this.btnExtAudio.classList.add('is-active');
+        this.btnExtAudioText.textContent = 'الصوت الخارجي: ' + source.name;
+        window.NativePlayback.setExternalAudioVolume(this.volume);
+        window.NativePlayback.setExternalAudioSyncOffset(this.delayMs);
+        // Pass the real provider stream ID to the native secondary Media3 player.
+        // Never overwrite channel.streamUrl with the shared native://stream placeholder.
+        window.NativePlayback.attachExternalAudioStream(
+          String(source.id),
+          source.containerExtension || 'ts'
+        );
       }
       onBuffering() { if (this.isActive) this.setStatus('connecting', 'جارٍ الاتصال أو إعادة المحاولة...'); }
       onPlaying() { if (this.isActive) { this.setStatus('playing', 'يعمل'); showToast('بدأ تشغيل القناة الصوتية المستقلة عبر Media3'); } }
