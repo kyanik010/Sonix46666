@@ -1241,8 +1241,9 @@
       const message = String(error && error.message ? error.message : error || '');
       return /تعذر العثور على خادم|انتهت مهلة الاتصال|تعذر الاتصال بخادم|فشل اتصال الخادم|قوائم محتوى فارغة|unable to resolve|failed to connect|connection refused|timed out|network|HTTP 5\d\d/i.test(message);
     }
-    function nativeArray(action) {
-      const value = parseNative(window.XtreamBridge.load(action));
+    function nativeArray(action, fromCache = false) {
+      const raw = fromCache ? window.XtreamBridge.loadCached(action) : window.XtreamBridge.load(action);
+      const value = parseNative(raw);
       if (!Array.isArray(value)) throw new Error('استجابة غير صالحة من الخادم: ' + action);
       return value;
     }
@@ -1262,15 +1263,15 @@
       const ext = (item.container_extension || (type === 'live' ? 'ts' : 'mp4')).replace(/^\./,'');
       return parseNative(window.XtreamBridge.streamUrl(type,String(id),ext)).url;
     }
-    function loadXtreamContent() {
-      const lc = makeCategories(nativeArray('get_live_categories'),'live-');
-      const mc = makeCategories(nativeArray('get_vod_categories'),'movie-');
-      const sc = makeCategories(nativeArray('get_series_categories'),'series-');
+    function loadXtreamContent(fromCache = false) {
+      const lc = makeCategories(nativeArray('get_live_categories',fromCache),'live-');
+      const mc = makeCategories(nativeArray('get_vod_categories',fromCache),'movie-');
+      const sc = makeCategories(nativeArray('get_series_categories',fromCache),'series-');
       const categoryName = (list,prefix,id) => (list._nameById && list._nameById.get(String(id))) || '';
       [lc,mc,sc].forEach(list => { list._nameById = new Map(list.map(item => [item.providerId, item.name])); });
-      const rawLive = nativeArray('get_live_streams');
-      const rawMovies = nativeArray('get_vod_streams');
-      const rawSeries = nativeArray('get_series');
+      const rawLive = nativeArray('get_live_streams',fromCache);
+      const rawMovies = nativeArray('get_vod_streams',fromCache);
+      const rawSeries = nativeArray('get_series',fromCache);
       if (rawLive.length + rawMovies.length + rawSeries.length === 0) {
         throw new Error('أعاد الخادم قوائم محتوى فارغة؛ لن نستبدل البيانات السابقة');
       }
@@ -1288,56 +1289,38 @@
       series = rawSeries.map((x,i) => ({id:String(x.series_id),seriesId:String(x.series_id),number:i+1,name:x.name || 'مسلسل',
         category:x.category_id == null ? '' : 'series-' + x.category_id,categoryName:categoryName(sc,'series-',x.category_id),
         logo:x.cover || '',logoText:'',streamUrl:'',rating:x.rating || '',desc:x.plot || ''}));
-      const safeCopy = rows => rows.map(item => ({...item, streamUrl:''}));
-      const catalogSnapshot = {
-        liveCategories,liveChannels:safeCopy(liveChannels),movieCategories,movies:safeCopy(movies),
-        seriesCategories,series:safeCopy(series)
-      };
-      // The complete catalogue is written atomically to Android's private files,
-      // outside WebView localStorage quotas. A failed write is a failed sync.
-      const cacheResult = parseNative(window.XtreamBridge.saveCatalogCache(
-        activeCredentials.server, activeCredentials.username, JSON.stringify(catalogSnapshot)
-      ));
-      if (!cacheResult.saved) throw new Error('تعذر حفظ المحتوى كاملاً على الجهاز');
-      isOfflineCache = false;
+      // XtreamBridge persists each API response atomically as it arrives.
+      // The native cache is marked complete only after all six responses exist.
+      isOfflineCache = Boolean(fromCache);
       const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display='none';
       renderCategories(); renderItems(); renderAudioSourcePicker();
     }
     function restoreXtreamCache() {
       try {
-        let c = null;
-        try {
-          const saved = parseNative(window.XtreamBridge.loadCatalogCache(
-            activeCredentials.server, activeCredentials.username
-          ));
-          c = saved.catalog;
-        } catch (_) {
-          // One-time migration path for catalogues created by older app versions.
-          const legacy = JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
-          if (legacy && Array.isArray(legacy.liveChannels) &&
-              Array.isArray(legacy.movies) && Array.isArray(legacy.series)) {
-            c = legacy;
-            try {
-              parseNative(window.XtreamBridge.saveCatalogCache(
-                activeCredentials.server, activeCredentials.username, JSON.stringify(c)
-              ));
-            } catch (migrationError) {
-              console.warn('Legacy catalogue migration could not be persisted', migrationError);
-            }
-          }
-        }
-        if (!c || !Array.isArray(c.liveChannels) || !Array.isArray(c.movies) ||
-            !Array.isArray(c.series) || !Array.isArray(c.liveCategories) ||
-            !Array.isArray(c.movieCategories) || !Array.isArray(c.seriesCategories)) return false;
-        liveCategories=orderCategories(c.liveCategories,'جميع القنوات'); liveChannels=c.liveChannels;
-        movieCategories=orderCategories(c.movieCategories,'جميع الأفلام'); movies=c.movies;
-        seriesCategories=orderCategories(c.seriesCategories,'جميع المسلسلات'); series=c.series;
+        // Read the six already-synchronized API responses from Android storage.
+        // This path performs no provider network requests.
+        loadXtreamContent(true);
         const hasContent=liveChannels.length + movies.length + series.length > 0;
+        isOfflineCache=hasContent;
         const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
         return hasContent;
-      } catch (error) {
-        console.error('Unable to restore native provider catalogue', error);
-        return false;
+      } catch (nativeCacheError) {
+        // Keep compatibility with the older WebView cache for an upgrade path.
+        try {
+          const c=JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
+          if (!c || !Array.isArray(c.liveChannels) || !Array.isArray(c.movies) ||
+              !Array.isArray(c.series) || !Array.isArray(c.liveCategories) ||
+              !Array.isArray(c.movieCategories) || !Array.isArray(c.seriesCategories)) return false;
+          liveCategories=orderCategories(c.liveCategories,'جميع القنوات'); liveChannels=c.liveChannels;
+          movieCategories=orderCategories(c.movieCategories,'جميع الأفلام'); movies=c.movies;
+          seriesCategories=orderCategories(c.seriesCategories,'جميع المسلسلات'); series=c.series;
+          const hasContent=liveChannels.length + movies.length + series.length > 0;
+          const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
+          return hasContent;
+        } catch (_) {
+          console.warn('Unable to restore provider catalogue', nativeCacheError);
+          return false;
+        }
       }
     }
     function setLoginMessage(message, success) {
