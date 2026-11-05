@@ -1775,3 +1775,9 @@
   .addon-card { align-items:flex-start; flex-direction:column; }
   .addon-card-actions { width:100%; }
 }
+
+.addons-manifest-row { display:flex; gap:8px; margin:10px 0; }
+.addons-manifest-row[hidden] { display:none; }
+.addons-manifest-row input { min-width:0; flex:1; }
+.addons-manifest-row button { flex-shrink:0; }
+@media (max-width:600px) { .addons-manifest-row { flex-direction:column; } }
