@@ -40,6 +40,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -73,6 +75,11 @@ class MainActivity : ComponentActivity() {
     private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
     private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
     private val subtitleGeneration = AtomicLong(0)
+    private val subtitleActivationHandler = Handler(Looper.getMainLooper())
+    private var subtitleActivationTimeout: Runnable? = null
+    private var pendingSubtitleRequestId: String? = null
+    private var pendingSubtitleLabel = ""
+    private var pendingSubtitleNotifyLocal = false
     private var subtitlePickerGeneration = 0L
     private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
@@ -286,6 +293,27 @@ class MainActivity : ComponentActivity() {
             playerView.player = player
 
             player.addListener(object : Player.Listener {
+                override fun onTracksChanged(tracks: Tracks) {
+                    if (activeSubtitleFile == null || pendingSubtitleLabel.isBlank()) return
+                    val playerNow = nativePlayer ?: return
+                    val candidate = tracks.groups.firstNotNullOfOrNull { group ->
+                        if (group.type != C.TRACK_TYPE_TEXT) return@firstNotNullOfOrNull null
+                        val index = (0 until group.length).firstOrNull { group.isTrackSupported(it) }
+                            ?: return@firstNotNullOfOrNull null
+                        group to index
+                    } ?: return
+                    val (group, trackIndex) = candidate
+                    if (!group.isTrackSelected(trackIndex)) {
+                        playerNow.trackSelectionParameters = playerNow.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .addOverride(TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex)))
+                            .build()
+                        return
+                    }
+                    finishSubtitleActivation(true, "")
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
                         Player.STATE_BUFFERING -> webView?.evaluateJavascript(
@@ -496,13 +524,7 @@ class MainActivity : ComponentActivity() {
                         deliverSubtitleResponse(requestId, JSONObject().put("success", false)
                             .put("error", "تغير المحتوى قبل اكتمال تحميل الترجمة").toString())
                     } else if (downloaded != null) {
-                        try {
-                            attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false)
-                            deliverSubtitleResponse(requestId, payload)
-                        } catch (error: Exception) {
-                            deliverSubtitleResponse(requestId, JSONObject().put("success", false)
-                                .put("error", error.message ?: "تعذر تطبيق الترجمة").toString())
-                        }
+                        attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false, requestId)
                     } else {
                         deliverSubtitleResponse(requestId, payload)
                     }
@@ -541,6 +563,7 @@ class MainActivity : ComponentActivity() {
         fun clearSubtitle() {
             runOnUiThread {
                 subtitleGeneration.incrementAndGet()
+                finishSubtitleActivation(false, "تم إيقاف الترجمة")
                 activeSubtitleFile = null
                 nativePlayer?.let { player ->
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -886,18 +909,66 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun attachSubtitleFile(file: File, label: String, notify: Boolean = true) {
+    private fun attachSubtitleFile(
+        file: File,
+        label: String,
+        notify: Boolean = true,
+        requestId: String? = null
+    ) {
         if (nativePlayer == null || activeMediaUri == null) {
-            notifyLocalSubtitleResult(false, label, "شغّل الفيديو أولاً قبل إضافة الترجمة")
+            val error = "شغّل الفيديو أولاً قبل إضافة الترجمة"
+            if (requestId != null) {
+                deliverSubtitleResponse(requestId, JSONObject().put("success", false).put("error", error).toString())
+            } else if (notify) notifyLocalSubtitleResult(false, label, error)
             return
         }
+        if (!file.exists() || file.length() <= 0L) {
+            val error = "ملف الترجمة غير موجود أو فارغ"
+            if (requestId != null) {
+                deliverSubtitleResponse(requestId, JSONObject().put("success", false).put("error", error).toString())
+            } else if (notify) notifyLocalSubtitleResult(false, label, error)
+            return
+        }
+
+        finishSubtitleActivation(false, "تم استبدال طلب الترجمة")
         activeSubtitleFile = file
+        pendingSubtitleRequestId = requestId
+        pendingSubtitleLabel = label
+        pendingSubtitleNotifyLocal = notify
         nativePlayer?.let { player ->
             player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).build()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .build()
         }
-        rebuildCurrentMediaItem(file)
-        if (notify) notifyLocalSubtitleResult(true, label, "")
+        try {
+            rebuildCurrentMediaItem(file)
+            val timeout = Runnable {
+                finishSubtitleActivation(false, "تعذر على المشغل قراءة مسار الترجمة أو تفعيله")
+            }
+            subtitleActivationTimeout = timeout
+            subtitleActivationHandler.postDelayed(timeout, 15000L)
+        } catch (error: Exception) {
+            finishSubtitleActivation(false, error.message ?: "تعذر تطبيق الترجمة")
+        }
+    }
+
+    private fun finishSubtitleActivation(success: Boolean, message: String) {
+        subtitleActivationTimeout?.let(subtitleActivationHandler::removeCallbacks)
+        subtitleActivationTimeout = null
+        val requestId = pendingSubtitleRequestId
+        val label = pendingSubtitleLabel
+        val notifyLocal = pendingSubtitleNotifyLocal
+        pendingSubtitleRequestId = null
+        pendingSubtitleLabel = ""
+        pendingSubtitleNotifyLocal = false
+        if (requestId != null) {
+            val response = JSONObject().put("success", success)
+            if (!success) response.put("error", message.ifBlank { "تعذر تفعيل الترجمة" })
+            deliverSubtitleResponse(requestId, response.toString())
+        } else if (notifyLocal && label.isNotBlank()) {
+            notifyLocalSubtitleResult(success, label, message)
+        }
     }
 
     private fun rebuildCurrentMediaItem(subtitleFile: File?) {
@@ -963,6 +1034,7 @@ class MainActivity : ComponentActivity() {
 
     private fun stopNativePlayer() {
         subtitleGeneration.incrementAndGet()
+        finishSubtitleActivation(false, "توقف تشغيل المحتوى قبل تفعيل الترجمة")
         activeMediaUri = null
         activeSubtitleFile = null
         nativePlayerActive = false
