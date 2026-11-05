@@ -422,16 +422,11 @@
       }
 
       toggleSubtitles() {
-        this.subtitlesEnabled = !this.subtitlesEnabled;
-        sonixSettings.subtitles = this.subtitlesEnabled;
-        saveSonixSettings();
-        if (window.NativePlayback && window.NativePlayback.setSubtitlesEnabled) {
-          window.NativePlayback.setSubtitlesEnabled(this.subtitlesEnabled);
+        if (window.SonixSubtitles && window.SonixSubtitles.openSearch) {
+          window.SonixSubtitles.openSearch();
+          return;
         }
-        const button=document.getElementById('btn-toggle-subtitles');
-        const label=document.getElementById('subtitle-label');
-        if(button) { button.classList.toggle('is-active',this.subtitlesEnabled); button.setAttribute('aria-pressed',String(this.subtitlesEnabled)); }
-        if(label) label.textContent=this.subtitlesEnabled ? 'إخفاء الترجمة' : 'الترجمة';
+        showToast('واجهة الترجمة غير جاهزة');
       }
 
       toggleQualityMenu() {
@@ -1188,7 +1183,10 @@
             card.addEventListener('click',()=>{
               const ext=ep.container_extension || 'mp4';
               closeAllModals();
-              selectItem({...item,seriesId:null,id:String(ep.id),name:ep.title || item.name,streamDescriptor:{type:'series',id:String(ep.id),ext:ext},streamUrl:'native://stream'});
+              selectItem({...item,seriesId:null,id:String(ep.id),name:ep.title || item.name,
+                subtitleTitle:item.name,seriesTitle:item.name,subtitleSeries:true,
+                subtitleSeason:Number(season),subtitleEpisode:episodeNumber,
+                streamDescriptor:{type:'series',id:String(ep.id),ext:ext},streamUrl:'native://stream'});
             });
             list.appendChild(card);
           });
