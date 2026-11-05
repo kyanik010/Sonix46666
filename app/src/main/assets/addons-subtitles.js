@@ -230,7 +230,7 @@
         return;
       }
       const manifest = await nativeJson(addon.url);
-      if (!manifest || !manifest.id || !manifest.version || !Array.isArray(manifest.resources)) {
+      if (!manifest || !manifest.id || !manifest.name) {
         throw new Error('ملف Manifest غير مكتمل أو غير صالح.');
       }
       const clean = normalizeAddon({...addon,...manifest,url:addon.url},addon.source);
