@@ -147,16 +147,26 @@ class XtreamBridge(context: Context) {
         val sameAccount = previous != null &&
             previous.optString("server") == server &&
             previous.optString("username") == username
-        val actions = if (sameAccount) previous?.optJSONObject("actions") ?: JSONObject() else JSONObject()
-        actions.put(action, parsed)
-        val complete = catalogActions.all { actions.optJSONArray(it) != null }
+        val committedActions = if (sameAccount) previous?.optJSONObject("actions") ?: JSONObject() else JSONObject()
+        // Build a new generation separately. If the app closes mid-sync, the
+        // previous complete catalogue remains intact and readable.
+        val pendingActions = if (action == "get_live_categories" || !sameAccount) {
+            JSONObject()
+        } else {
+            previous?.optJSONObject("pendingActions") ?: JSONObject()
+        }
+        pendingActions.put(action, parsed)
+        val syncComplete = catalogActions.all { pendingActions.optJSONArray(it) != null }
+        val finalActions = if (syncComplete) pendingActions else committedActions
+        val hasCompleteCatalogue = catalogActions.all { finalActions.optJSONArray(it) != null }
         val envelope = JSONObject()
             .put("version", 1)
             .put("server", server)
             .put("username", username)
-            .put("savedAt", System.currentTimeMillis())
-            .put("complete", complete)
-            .put("actions", actions)
+            .put("savedAt", if (syncComplete) System.currentTimeMillis() else previous?.optLong("savedAt", 0L) ?: 0L)
+            .put("complete", hasCompleteCatalogue)
+            .put("actions", finalActions)
+        if (!syncComplete) envelope.put("pendingActions", pendingActions)
 
         var output: FileOutputStream? = null
         try {
