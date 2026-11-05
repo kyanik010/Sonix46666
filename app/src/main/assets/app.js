@@ -99,7 +99,6 @@
     let movieCategories = [], movies = [];
     let seriesCategories = [], series = [];
     let activeCredentials = null, accountInfo = null, isOfflineCache = false;
-    let lastContentRefreshError = null;
     const FAVORITES_STORAGE_KEY = 'sonix_favorites_v2';
     function readSavedFavorites() {
       try {
@@ -1290,29 +1289,56 @@
         category:x.category_id == null ? '' : 'series-' + x.category_id,categoryName:categoryName(sc,'series-',x.category_id),
         logo:x.cover || '',logoText:'',streamUrl:'',rating:x.rating || '',desc:x.plot || ''}));
       const safeCopy = rows => rows.map(item => ({...item, streamUrl:''}));
-      try {
-        localStorage.setItem('sonix_provider_cache_v1',JSON.stringify({
-          liveCategories,liveChannels:safeCopy(liveChannels),movieCategories,movies:safeCopy(movies),
-          seriesCategories,series:safeCopy(series)
-        }));
-      } catch (cacheError) {
-        console.warn('Unable to persist provider cache; continuing with live content', cacheError);
-      }
+      const catalogSnapshot = {
+        liveCategories,liveChannels:safeCopy(liveChannels),movieCategories,movies:safeCopy(movies),
+        seriesCategories,series:safeCopy(series)
+      };
+      // The complete catalogue is written atomically to Android's private files,
+      // outside WebView localStorage quotas. A failed write is a failed sync.
+      const cacheResult = parseNative(window.XtreamBridge.saveCatalogCache(
+        activeCredentials.server, activeCredentials.username, JSON.stringify(catalogSnapshot)
+      ));
+      if (!cacheResult.saved) throw new Error('تعذر حفظ المحتوى كاملاً على الجهاز');
       isOfflineCache = false;
       const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display='none';
       renderCategories(); renderItems(); renderAudioSourcePicker();
     }
     function restoreXtreamCache() {
       try {
-        const c = JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
-        if (!c) return false;
-        liveCategories=orderCategories(c.liveCategories || [],'جميع القنوات'); liveChannels=c.liveChannels || [];
-        movieCategories=orderCategories(c.movieCategories || [],'جميع الأفلام'); movies=c.movies || [];
-        seriesCategories=orderCategories(c.seriesCategories || [],'جميع المسلسلات'); series=c.series || [];
+        let c = null;
+        try {
+          const saved = parseNative(window.XtreamBridge.loadCatalogCache(
+            activeCredentials.server, activeCredentials.username
+          ));
+          c = saved.catalog;
+        } catch (_) {
+          // One-time migration path for catalogues created by older app versions.
+          const legacy = JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
+          if (legacy && Array.isArray(legacy.liveChannels) &&
+              Array.isArray(legacy.movies) && Array.isArray(legacy.series)) {
+            c = legacy;
+            try {
+              parseNative(window.XtreamBridge.saveCatalogCache(
+                activeCredentials.server, activeCredentials.username, JSON.stringify(c)
+              ));
+            } catch (migrationError) {
+              console.warn('Legacy catalogue migration could not be persisted', migrationError);
+            }
+          }
+        }
+        if (!c || !Array.isArray(c.liveChannels) || !Array.isArray(c.movies) ||
+            !Array.isArray(c.series) || !Array.isArray(c.liveCategories) ||
+            !Array.isArray(c.movieCategories) || !Array.isArray(c.seriesCategories)) return false;
+        liveCategories=orderCategories(c.liveCategories,'جميع القنوات'); liveChannels=c.liveChannels;
+        movieCategories=orderCategories(c.movieCategories,'جميع الأفلام'); movies=c.movies;
+        seriesCategories=orderCategories(c.seriesCategories,'جميع المسلسلات'); series=c.series;
         const hasContent=liveChannels.length + movies.length + series.length > 0;
         const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
         return hasContent;
-      } catch (_) { return false; }
+      } catch (error) {
+        console.error('Unable to restore native provider catalogue', error);
+        return false;
+      }
     }
     function setLoginMessage(message, success) {
       const el=document.getElementById('sonix-login-message');
@@ -1448,13 +1474,11 @@
         isOfflineCache=false;
         updateAccount(session.user_info);
         loadXtreamContent();
-        lastContentRefreshError = null;
         const status=document.getElementById('profile-server-status');
         if(status) status.textContent='تم التحقق من الاشتراك';
         if (!silent) showToast('تم تحديث المحتوى من خادم الاشتراك');
         return true;
       } catch(error) {
-        lastContentRefreshError = error;
         const retryable = isNetworkFailure(error);
         const hasCache=!!(activeCredentials && retryable && restoreXtreamCache());
         isOfflineCache=hasCache;
@@ -1465,21 +1489,6 @@
         if (!silent) showToast('فشل التحديث: ' + (error.message || 'تعذر الاتصال'));
         return false;
       }
-    }
-
-    // Revalidate the saved account and reload all catalogues after every fresh app start.
-    // Retry transient network failures without clearing a previously restored local catalogue.
-    function restoreProviderContentOnStartup(attempt = 0) {
-      if (!activeCredentials) return;
-      if (refreshXtreamContent({silent:true})) return;
-
-      const error = lastContentRefreshError;
-      if (attempt < 2 && isNetworkFailure(error)) {
-        const retryDelays = [3000, 8000];
-        setTimeout(() => restoreProviderContentOnStartup(attempt + 1), retryDelays[attempt]);
-        return;
-      }
-      if (error) showToast('تعذر استعادة المحتوى: ' + (error.message || 'تحقق من اتصال الإنترنت'));
     }
 
     /**
@@ -2013,8 +2022,7 @@
         renderItems();
         renderAudioSourcePicker();
         const startupStatus=document.getElementById('profile-server-status');
-        if(startupStatus) startupStatus.textContent='جارٍ استعادة القنوات والأفلام والمسلسلات...';
-        setTimeout(() => restoreProviderContentOnStartup(), 400);
+        if(startupStatus) startupStatus.textContent=isOfflineCache?'تمت استعادة المحتوى المحفوظ محلياً':'المحتوى جاهز';
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
