@@ -858,39 +858,6 @@
       background: transparent !important;
       aspect-ratio: auto !important;
     }
-    .exit-fullscreen-btn {
-      display: none;
-      position: absolute;
-      top: 18px;
-      left: 18px;
-      z-index: 100001;
-      background: rgba(17, 24, 32, 0.92);
-      border: 1px solid var(--card-border);
-      color: #fff;
-      padding: 8px 16px;
-      border-radius: 12px;
-      font-size: 0.85rem;
-      font-weight: 800;
-      gap: 8px;
-      align-items: center;
-      cursor: pointer;
-      backdrop-filter: blur(12px);
-      box-shadow: 0 6px 20px rgba(0,0,0,0.6);
-      transition: all 0.2s ease;
-    }
-    .video-viewport.is-fullscreen .exit-fullscreen-btn {
-      display: flex;
-    }
-    .exit-fullscreen-btn:hover,
-    .exit-fullscreen-btn.keyboard-focused {
-      background: var(--selected-item-bg);
-      border-color: var(--focus-blue);
-      transform: scale(1.05);
-    }
-    .exit-fullscreen-btn svg {
-      width: 18px;
-      height: 18px;
-    }
     .player-match-overlay {
       position: absolute;
       top: 14px;
