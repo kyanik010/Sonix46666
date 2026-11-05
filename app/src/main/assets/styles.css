@@ -1086,7 +1086,7 @@
       transition: opacity .18s ease, visibility .18s ease;
     }
     /* VOD progress timeline sits above the control row and is hidden with it. */
-    .video-viewport.has-vod-timeline .player-timeline.visible {
+    .video-viewport.has-vod-timeline .player-timeline.visible.available {
       display: block;
       opacity: 1;
       visibility: visible;
