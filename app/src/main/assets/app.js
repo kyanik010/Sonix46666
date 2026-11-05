@@ -168,6 +168,8 @@
         this.isMuted = false;
         this.subtitlesEnabled = sonixSettings.subtitles;
         this.controlsHideTimer = null;
+        this.isSeekingTimeline = false;
+        this.timelineDurationMs = 0;
         this.pendingPlayToken = 0;
         this.viewportResizeObserver = null;
         if (this.viewport && typeof ResizeObserver !== 'undefined') {
@@ -200,6 +202,40 @@
         document.getElementById('ctrl-mute-btn').addEventListener('click', () => this.toggleMute());
         document.getElementById('ctrl-seek-back').addEventListener('click', () => this.seekBy(-10000));
         document.getElementById('ctrl-seek-forward').addEventListener('click', () => this.seekBy(10000));
+        const seekBar = document.getElementById('player-seek-bar');
+        if (seekBar) {
+          seekBar.addEventListener('pointerdown', () => {
+            this.isSeekingTimeline = true;
+            this.showPlaybackControls();
+          });
+          seekBar.addEventListener('input', () => {
+            this.isSeekingTimeline = true;
+            this.showPlaybackControls();
+            const target = this.timelineDurationMs * (Number(seekBar.value) / 1000);
+            const currentLabel = document.getElementById('player-current-time');
+            if (currentLabel) currentLabel.textContent = this.formatTimelineTime(target);
+            seekBar.style.setProperty('--progress', (Number(seekBar.value) / 10) + '%');
+            seekBar.setAttribute('aria-valuenow', seekBar.value);
+          });
+          seekBar.addEventListener('change', () => {
+            const target = this.timelineDurationMs * (Number(seekBar.value) / 1000);
+            this.isSeekingTimeline = false;
+            this.seekToPosition(target);
+          });
+          seekBar.addEventListener('pointercancel', () => { this.isSeekingTimeline = false; });
+          seekBar.addEventListener('focus', () => this.showPlaybackControls());
+          seekBar.addEventListener('keydown', (event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'Left' &&
+                event.key !== 'ArrowRight' && event.key !== 'Right') return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.showPlaybackControls();
+            this.seekBy((event.key === 'ArrowRight' || event.key === 'Right') ? 10000 : -10000);
+          });
+        }
+        window.addEventListener('keydown', () => {
+          if (this.isFullscreen) this.showPlaybackControls();
+        }, true);
         document.getElementById('btn-toggle-subtitles').addEventListener('click', () => this.toggleSubtitles());
         document.getElementById('btn-quality').addEventListener('click', () => this.toggleQualityMenu());
         document.querySelectorAll('.player-quality-option').forEach(option => option.addEventListener('click', () => {
@@ -221,7 +257,7 @@
           this.viewport.addEventListener('touchend', (e) => {
             // Toolbar taps operate their controls; only a double tap on the video
             // surface itself may leave fullscreen.
-            if (e.target.closest('.player-playback-controls, .control-btn, .action-btn')) return;
+            if (e.target.closest('.player-playback-controls, .player-timeline, .control-btn, .action-btn')) return;
             const now = Date.now();
             if (now - lastTapTime < 350 && now - lastTapTime > 40) {
               e.preventDefault();
@@ -241,6 +277,10 @@
         const controls = document.getElementById('player-playback-controls');
         if (!controls) return;
         controls.classList.add('visible');
+        const timeline = document.getElementById('player-timeline');
+        if (timeline && this.viewport && this.viewport.classList.contains('has-vod-timeline')) {
+          timeline.classList.add('visible');
+        }
         if (this.viewport) this.viewport.classList.add('playback-controls-visible');
         if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
         this.controlsHideTimer = setTimeout(() => this.hidePlaybackControls(), 10000);
@@ -261,6 +301,8 @@
         const controls = document.getElementById('player-playback-controls');
         if (controls) {
           controls.classList.remove('visible');
+          const timeline = document.getElementById('player-timeline');
+          if (timeline) timeline.classList.remove('visible');
           const menu = document.getElementById('player-quality-menu');
           if (menu) menu.classList.remove('open');
           const qualityButton = document.getElementById('btn-quality');
@@ -416,6 +458,54 @@
         if(button) button.classList.toggle('is-active',this.isMuted);
       }
 
+      formatTimelineTime(milliseconds) {
+        const totalSeconds = Math.max(0, Math.floor(Number(milliseconds) / 1000));
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const mm = String(minutes).padStart(2, '0');
+        const ss = String(seconds).padStart(2, '0');
+        return hours > 0 ? hours + ':' + mm + ':' + ss : mm + ':' + ss;
+      }
+
+      updateTimeline(positionMs, durationMs, seekable) {
+        const timeline = document.getElementById('player-timeline');
+        const seekBar = document.getElementById('player-seek-bar');
+        if (!timeline || !seekBar) return;
+        const duration = Number(durationMs);
+        const position = Math.max(0, Number(positionMs) || 0);
+        const usable = currentAppMode !== 'live' && !!seekable && Number.isFinite(duration) && duration > 0;
+        timeline.classList.toggle('available', usable);
+        seekBar.disabled = !usable;
+        if (!usable) {
+          this.timelineDurationMs = 0;
+          return;
+        }
+        this.timelineDurationMs = duration;
+        const totalLabel = document.getElementById('player-total-time');
+        if (totalLabel) totalLabel.textContent = this.formatTimelineTime(duration);
+        if (!this.isSeekingTimeline) {
+          const ratio = Math.max(0, Math.min(1, position / duration));
+          seekBar.value = String(Math.round(ratio * 1000));
+          seekBar.setAttribute('aria-valuenow', seekBar.value);
+          seekBar.style.setProperty('--progress', (ratio * 100) + '%');
+          const currentLabel = document.getElementById('player-current-time');
+          if (currentLabel) currentLabel.textContent = this.formatTimelineTime(position);
+        }
+      }
+
+      seekToPosition(positionMs) {
+        if (currentAppMode === 'live' || !window.NativePlayback) return;
+        const target = Math.max(0, Math.min(this.timelineDurationMs, Number(positionMs) || 0));
+        if (typeof window.NativePlayback.seekTo === 'function') {
+          window.NativePlayback.seekTo(Math.round(target));
+        } else if (typeof window.NativePlayback.seekBy === 'function') {
+          const current = this.timelineDurationMs * (Number(document.getElementById('player-seek-bar')?.value || 0) / 1000);
+          window.NativePlayback.seekBy(Math.round(target - current));
+        }
+        this.showPlaybackControls();
+      }
+
       seekBy(offsetMs) {
         if (currentAppMode === 'live') {
           showToast('التقديم والإرجاع متاحان للأفلام والمسلسلات فقط');
@@ -531,6 +621,7 @@
         const scoreOverlay = document.getElementById('player-score-overlay');
         const playerPanel = document.querySelector('.live-player-col');
         if (playerPanel) playerPanel.classList.toggle('is-live-mode', currentAppMode === 'live');
+        if (this.viewport) this.viewport.classList.toggle('has-vod-timeline', currentAppMode !== 'live');
         if (scoreOverlay) scoreOverlay.style.display = currentAppMode === 'live' ? 'flex' : 'none';
         if (currentAppMode === 'live') {
           document.getElementById('epg-modal-channel-name').textContent = 'دليل البرامج - ' + item.name;
@@ -678,7 +769,11 @@
             if (videoPlaybackController.isFullscreen && controls && !controls.classList.contains('visible')) {
               e.preventDefault();
               videoPlaybackController.showPlaybackControls();
-              const firstControl = controls.querySelector('.playback-control-btn:not([disabled])');
+              const seekBar = document.getElementById('player-seek-bar');
+              const firstControl = seekBar && !seekBar.disabled &&
+                videoPlaybackController.viewport.classList.contains('has-vod-timeline')
+                ? seekBar
+                : controls.querySelector('.playback-control-btn:not([disabled])');
               if (firstControl) this.focusElement(firstControl);
               return;
             }
@@ -1742,6 +1837,9 @@
       }
     };
     window.onNativePlaybackStateChanged = function(isPlaying) { if (videoPlaybackController) videoPlaybackController.updatePlaybackState(!!isPlaying); };
+    window.onNativePlaybackProgress = function(positionMs, durationMs, seekable) {
+      if (videoPlaybackController) videoPlaybackController.updateTimeline(positionMs, durationMs, !!seekable);
+    };
     window.onNativePlaybackEnded = function() { if (videoPlaybackController) videoPlaybackController.updatePlaybackState(false); };
     window.onNativePlaybackError = function(message) {
       const panel=document.querySelector('.live-player-col'); if(panel) panel.classList.remove('has-active-playback');
