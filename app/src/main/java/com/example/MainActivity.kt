@@ -260,10 +260,10 @@ class MainActivity : ComponentActivity() {
             // short network jitter, including when external audio is also active.
             val videoLoadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    5000,   // minimum buffer: 5 seconds
-                    30000,  // maximum buffer: 30 seconds
-                    2500,   // initial playback buffer: 2.5 seconds
-                    5000    // resume after rebuffering: 5 seconds
+                    3000,   // keep a modest safety buffer for IPTV streams
+                    20000,  // cap buffered media to limit memory use
+                    1000,   // start as soon as one second is buffered
+                    2000    // recover faster after a brief network interruption
                 )
                 .build()
             val player = ExoPlayer.Builder(this@MainActivity)
