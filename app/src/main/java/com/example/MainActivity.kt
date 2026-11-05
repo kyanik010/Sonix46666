@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewOutlineProvider
@@ -45,6 +46,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultHttpDataSource
 import kotlin.math.roundToInt
@@ -68,6 +70,14 @@ class MainActivity : ComponentActivity() {
     private var nativePlayerView: PlayerView? = null
     private var nativeVideoStreamType: String? = null
     private var nativeVideoStreamId: String? = null
+    private val playbackRecoveryHandler = Handler(Looper.getMainLooper())
+    private var playbackRequestStartedAtMs = 0L
+    private var bufferingStartedAtMs = 0L
+    private var hasPlaybackReachedReady = false
+    private var firstFrameLogged = false
+    private var liveRecoveryAttempts = 0
+    private var playbackWatchdogRunnable: Runnable? = null
+    private var liveRecoveryRunnable: Runnable? = null
     private var nativePlayerCornerRadiusPx = 0f
     @Volatile private var immersiveVideoFullscreen = false
     private var activeMediaUri: Uri? = null
@@ -201,9 +211,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 try {
                     val mediaUri = xtreamBridge.buildPlaybackUri(type, streamId, extension)
-                    startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
-                    nativeVideoStreamType = type
-                    nativeVideoStreamId = streamId.trim()
+                    startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx, type, streamId.trim())
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تجهيز رابط البث من الاشتراك")
@@ -221,9 +229,7 @@ class MainActivity : ComponentActivity() {
                     require((mediaUri.scheme == "http" || mediaUri.scheme == "https") && !mediaUri.host.isNullOrBlank()) {
                         "رابط البث غير صالح"
                     }
-                    startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
-                    nativeVideoStreamType = null
-                    nativeVideoStreamId = null
+                    startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx, null, null)
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تشغيل البث")
@@ -240,9 +246,18 @@ class MainActivity : ComponentActivity() {
             width: Float,
             height: Float,
             pixelRatio: Float,
-            cornerRadiusCssPx: Float
+            cornerRadiusCssPx: Float,
+            streamType: String?,
+            streamId: String?
         ) {
             stopNativePlayer()
+            nativeVideoStreamType = streamType
+            nativeVideoStreamId = streamId
+            playbackRequestStartedAtMs = SystemClock.elapsedRealtime()
+            bufferingStartedAtMs = 0L
+            hasPlaybackReachedReady = false
+            firstFrameLogged = false
+            liveRecoveryAttempts = 0
             val container = rootContainer ?: throw IllegalStateException("واجهة المشغل غير جاهزة")
             nativePlayerCornerRadiusPx = cssPixelsToAndroidPixels(cornerRadiusCssPx.coerceIn(0f, 32f), pixelRatio).toFloat()
             val params = calculatePlayerLayoutParams(left, top, width, height, pixelRatio, container, webView)
@@ -252,7 +267,7 @@ class MainActivity : ComponentActivity() {
                 .setUserAgent("SONIX-TV/1.0")
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(30000)
+                .setReadTimeoutMs(10000)
             activeMediaUri = mediaUri
             activeSubtitleFile = null
             val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
@@ -336,12 +351,32 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
-                        Player.STATE_BUFFERING -> webView?.evaluateJavascript(
-                            "window.onNativePlaybackBuffering && window.onNativePlaybackBuffering()", null)
-                        Player.STATE_READY -> webView?.evaluateJavascript(
-                            "window.onNativePlaybackReady && window.onNativePlaybackReady()", null)
-                        Player.STATE_ENDED -> webView?.evaluateJavascript(
-                            "window.onNativePlaybackEnded && window.onNativePlaybackEnded()", null)
+                        Player.STATE_BUFFERING -> {
+                            startPlaybackWatchdog(player)
+                            webView?.evaluateJavascript(
+                                "window.onNativePlaybackBuffering && window.onNativePlaybackBuffering()", null)
+                        }
+                        Player.STATE_READY -> {
+                            playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+                            playbackWatchdogRunnable = null
+                            val now = SystemClock.elapsedRealtime()
+                            if (bufferingStartedAtMs > 0L) {
+                                android.util.Log.i("SONIXPlayback", "STATE_READY after " + (now - bufferingStartedAtMs) + "ms buffering; requestElapsed=" + (now - playbackRequestStartedAtMs) + "ms")
+                            }
+                            bufferingStartedAtMs = 0L
+                            hasPlaybackReachedReady = true
+                            liveRecoveryAttempts = 0
+                            liveRecoveryRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+                            liveRecoveryRunnable = null
+                            webView?.evaluateJavascript(
+                                "window.onNativePlaybackReady && window.onNativePlaybackReady()", null)
+                        }
+                        Player.STATE_ENDED -> {
+                            playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+                            playbackWatchdogRunnable = null
+                            webView?.evaluateJavascript(
+                                "window.onNativePlaybackEnded && window.onNativePlaybackEnded()", null)
+                        }
                     }
                 }
 
@@ -360,11 +395,28 @@ class MainActivity : ComponentActivity() {
                             append(it)
                         }
                     }
-                    android.util.Log.e("SONIXPlayback", "Playback failed: ${error.errorCodeName}")
-                    stopNativePlayer()
-                    val message = JSONObject.quote(detail)
-                    webView?.evaluateJavascript(
-                        "window.onNativePlaybackError && window.onNativePlaybackError(" + message + ")", null)
+                    android.util.Log.e("SONIXPlayback", "Playback failed: " + error.errorCodeName, error)
+                    if (nativeVideoStreamType == "live") {
+                        scheduleLiveRecovery(player, detail)
+                    } else {
+                        stopNativePlayer()
+                        notifyNativePlaybackError(detail)
+                    }
+                }
+            })
+
+            player.addAnalyticsListener(object : AnalyticsListener {
+                override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                    if (!firstFrameLogged) {
+                        firstFrameLogged = true
+                        android.util.Log.i("SONIXPlayback", "FIRST_FRAME elapsed=" + (SystemClock.elapsedRealtime() - playbackRequestStartedAtMs) + "ms streamType=" + (nativeVideoStreamType ?: "url"))
+                    }
+                }
+
+                override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
+                    if (droppedFrames > 0) {
+                        android.util.Log.w("SONIXPlayback", "Dropped " + droppedFrames + " video frames in " + elapsedMs + "ms")
+                    }
                 }
             })
 
@@ -384,6 +436,7 @@ class MainActivity : ComponentActivity() {
             player.setMediaItem(mediaItem)
             player.prepare()
             player.playWhenReady = true
+            android.util.Log.i("SONIXPlayback", "prepare() issued streamType=" + (nativeVideoStreamType ?: "url") + " elapsed=" + (SystemClock.elapsedRealtime() - playbackRequestStartedAtMs) + "ms")
             playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
             playbackProgressHandler.post(playbackProgressRunnable)
         }
@@ -1074,8 +1127,73 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun startPlaybackWatchdog(player: ExoPlayer) {
+        if (nativeVideoStreamType != "live" || player !== nativePlayer) return
+        if (bufferingStartedAtMs == 0L) bufferingStartedAtMs = SystemClock.elapsedRealtime()
+        playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+        val timeoutMs = if (hasPlaybackReachedReady) 12_000L else 20_000L
+        val watchdog = Runnable {
+            if (player !== nativePlayer || !nativePlayerActive || player.playbackState != Player.STATE_BUFFERING) return@Runnable
+            val elapsed = SystemClock.elapsedRealtime() - bufferingStartedAtMs
+            android.util.Log.w("SONIXPlayback", "Buffering watchdog fired after " + elapsed + "ms; streamId=" + nativeVideoStreamId)
+            scheduleLiveRecovery(player, "توقف البث مؤقتاً لأكثر من " + (elapsed / 1000) + " ثانية")
+        }
+        playbackWatchdogRunnable = watchdog
+        playbackRecoveryHandler.postDelayed(watchdog, timeoutMs)
+    }
+
+    private fun scheduleLiveRecovery(player: ExoPlayer, reason: String) {
+        if (player !== nativePlayer || !nativePlayerActive || nativeVideoStreamType != "live") return
+        if (liveRecoveryRunnable != null) return
+        if (liveRecoveryAttempts >= 3) {
+            val message = "تعذر استعادة القناة بعد 3 محاولات. " + reason
+            android.util.Log.e("SONIXPlayback", message)
+            stopNativePlayer()
+            notifyNativePlaybackError(message)
+            return
+        }
+        liveRecoveryAttempts += 1
+        val attempt = liveRecoveryAttempts
+        val delayMs = longArrayOf(1_000L, 2_000L, 4_000L)[attempt - 1]
+        android.util.Log.w("SONIXPlayback", "Live reconnect attempt " + attempt + "/3 in " + delayMs + "ms: " + reason)
+        val retry = Runnable {
+            liveRecoveryRunnable = null
+            if (player !== nativePlayer || !nativePlayerActive || nativeVideoStreamType != "live") return@Runnable
+            val currentItem = player.currentMediaItem
+            if (currentItem == null) {
+                stopNativePlayer()
+                notifyNativePlaybackError("تعذر استعادة القناة: لا يوجد مصدر تشغيل صالح")
+                return@Runnable
+            }
+            try {
+                bufferingStartedAtMs = SystemClock.elapsedRealtime()
+                player.stop()
+                player.setMediaItem(currentItem, true)
+                player.prepare()
+                player.playWhenReady = true
+            } catch (error: Exception) {
+                scheduleLiveRecovery(player, error.message ?: "فشلت إعادة الاتصال")
+            }
+        }
+        liveRecoveryRunnable = retry
+        playbackRecoveryHandler.postDelayed(retry, delayMs)
+    }
+
+    private fun notifyNativePlaybackError(message: String) {
+        val quoted = JSONObject.quote(message)
+        webView?.evaluateJavascript(
+            "window.onNativePlaybackError && window.onNativePlaybackError(" + quoted + ")", null)
+    }
+
     private fun stopNativePlayer() {
         playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+        playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+        playbackWatchdogRunnable = null
+        liveRecoveryRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+        liveRecoveryRunnable = null
+        bufferingStartedAtMs = 0L
+        hasPlaybackReachedReady = false
+        liveRecoveryAttempts = 0
         subtitleGeneration.incrementAndGet()
         finishSubtitleActivation(false, "توقف تشغيل المحتوى قبل تفعيل الترجمة")
         activeMediaUri = null
