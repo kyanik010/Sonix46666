@@ -468,12 +468,21 @@
           document.body.classList.add('sonix-video-fullscreen');
           this.isFullscreen = true;
           this.viewport.classList.add('is-fullscreen');
+          // Ask Android to hide system bars and let the native video surface fill
+          // the physical display, not just the WebView's content area.
+          if (window.NativePlayback && typeof window.NativePlayback.setFullscreen === 'function') {
+            window.NativePlayback.setFullscreen(true);
+          }
         } else {
           // Hide controls and dismiss any open quality menu before restoring preview.
           this.hidePlaybackControls();
           this.isFullscreen = false;
           this.viewport.classList.remove('is-fullscreen', 'is-live-mode');
           document.body.classList.remove('sonix-video-fullscreen');
+          // Restore Android system bars and the normal uncropped preview scaling.
+          if (window.NativePlayback && typeof window.NativePlayback.setFullscreen === 'function') {
+            window.NativePlayback.setFullscreen(false);
+          }
           const parent = this.fullscreenOriginalParent;
           if (parent) {
             if (this.fullscreenOriginalNextSibling &&
