@@ -249,6 +249,9 @@
   function activeIdentity() {
     const item = videoPlaybackController && videoPlaybackController.currentItem;
     if (!item) throw new Error('شغّل فيلماً أو حلقة أولاً للبحث عن ترجمتها.');
+    if (typeof currentAppMode !== 'undefined' && currentAppMode === 'live') {
+      throw new Error('البحث عن الترجمة متاح للأفلام والمسلسلات فقط.');
+    }
     const isSeries = !!(item.subtitleSeries || item.seriesTitle || (typeof currentAppMode !== 'undefined' && currentAppMode === 'series'));
     const title = String(item.subtitleTitle || item.seriesTitle || item.name || '').trim();
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
