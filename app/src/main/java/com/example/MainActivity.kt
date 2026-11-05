@@ -45,6 +45,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
 
@@ -53,6 +55,7 @@ class MainActivity : ComponentActivity() {
     private var nativePlayer: ExoPlayer? = null
     private var nativePlayerView: PlayerView? = null
     private var nativePlayerCornerRadiusPx = 0f
+    @Volatile private var immersiveVideoFullscreen = false
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
     @Volatile private var nativePlayerPlaying = false
@@ -300,6 +303,28 @@ class MainActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun setFullscreen(enabled: Boolean) {
+            runOnUiThread {
+                immersiveVideoFullscreen = enabled
+                applyVideoFullscreenSystemUi()
+                nativePlayerView?.resizeMode = if (enabled) {
+                    // Fill ultrawide phone displays in fullscreen; restore the full frame in preview.
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+                // System-bar visibility changes resize the WebView asynchronously. Re-read
+                // its final viewport after the inset/layout pass and realign the native surface.
+                webView?.postDelayed({
+                    webView?.evaluateJavascript(
+                        "(function(){if(window.videoPlaybackController){window.videoPlaybackController.syncNativeBounds();}})()",
+                        null
+                    )
+                }, 250L)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
         fun stop() { runOnUiThread { stopNativePlayer() } }
 
         @android.webkit.JavascriptInterface
@@ -445,6 +470,17 @@ class MainActivity : ComponentActivity() {
                 view.layoutParams = params
                 view.visibility = android.view.View.VISIBLE
             }
+        }
+    }
+
+    private fun applyVideoFullscreenSystemUi() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (immersiveVideoFullscreen) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -694,6 +730,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (immersiveVideoFullscreen) window.decorView.post { applyVideoFullscreenSystemUi() }
         webView?.onResume()
         if (resumeNativePlayerAfterPause) nativePlayer?.play()
         if (resumeNativePlayerAfterPause && externalAudioActive) secondaryAudioPlayer?.play()
@@ -716,7 +753,16 @@ class MainActivity : ComponentActivity() {
         webView?.onPause()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && immersiveVideoFullscreen) {
+            window.decorView.post { applyVideoFullscreenSystemUi() }
+        }
+    }
+
     override fun onDestroy() {
+        immersiveVideoFullscreen = false
+        applyVideoFullscreenSystemUi()
         detachExternalAudioInternal(false)
         stopNativePlayer()
         webView?.destroy()
