@@ -496,6 +496,11 @@ class MainActivity : ComponentActivity() {
         @android.webkit.JavascriptInterface
         fun applySubtitleAsync(rawUrl: String, label: String, requestId: String) {
             val requestGeneration = subtitleGeneration.incrementAndGet()
+            runOnUiThread {
+                if (requestGeneration == subtitleGeneration.get()) {
+                    finishSubtitleActivation(false, "تم استبدال طلب الترجمة")
+                }
+            }
             subtitleIoExecutor.execute {
                 var downloaded: File? = null
                 val payload = try {
@@ -540,6 +545,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 try {
                     subtitlePickerGeneration = subtitleGeneration.incrementAndGet()
+                    finishSubtitleActivation(false, "تم اختيار ملف ترجمة جديد")
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "*/*"
