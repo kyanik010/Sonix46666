@@ -251,7 +251,9 @@
         // Otherwise its 10-second auto-hide timer can leave the close action
         // without a visible/focusable return target on TV remotes.
         const audioDialog = document.getElementById('modal-ext-audio');
-        if (this.isFullscreen && audioDialog && audioDialog.classList.contains('active')) {
+        const subtitleDialog = document.getElementById('modal-subtitles');
+        if (this.isFullscreen && ((audioDialog && audioDialog.classList.contains('active')) ||
+            (subtitleDialog && subtitleDialog.classList.contains('active')))) {
           if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
           this.controlsHideTimer = null;
           return;
@@ -1001,31 +1003,61 @@
 
       const isFullscreenAudioDialog = modalId === 'modal-ext-audio' &&
         !!(videoPlaybackController && videoPlaybackController.isFullscreen);
+      const isSubtitlePopover = modalId === 'modal-subtitles';
 
-      // The fullscreen video is portaled to <body> while #app-container is
-      // deliberately hidden. Move the dialog out of that hidden subtree before
-      // making it active, then let the next frame calculate focusable geometry.
-      if (isFullscreenAudioDialog && modal.parentElement !== document.body) {
+      // Both playback dialogs must escape the hidden app subtree after the
+      // video viewport is portaled to <body> in fullscreen.
+      if ((isFullscreenAudioDialog || isSubtitlePopover) && modal.parentElement !== document.body) {
         modal._sonixOriginalParent = modal.parentElement;
         modal._sonixOriginalNextSibling = modal.nextSibling;
         document.body.appendChild(modal);
         modal.dataset.sonixFullscreenPortal = 'true';
       }
+      if (isSubtitlePopover) {
+        modal.classList.add('sonix-subtitle-popover');
+        const trigger = document.getElementById('btn-toggle-subtitles');
+        const panel = modal.querySelector('.subtitles-window');
+        const positionPopover = () => {
+          if (!modal.classList.contains('active') || !trigger || !panel) return;
+          const anchor = trigger.getBoundingClientRect();
+          const margin = 8;
+          const maxHeight = Math.max(180, Math.min(window.innerHeight * 0.78, 620));
+          panel.style.maxHeight = maxHeight + 'px';
+          const bounds = panel.getBoundingClientRect();
+          const width = bounds.width || Math.min(560, window.innerWidth - margin * 2);
+          const height = Math.min(bounds.height || panel.scrollHeight, maxHeight);
+          const left = Math.max(margin, Math.min(
+            anchor.left + anchor.width / 2 - width / 2,
+            window.innerWidth - width - margin
+          ));
+          let top = anchor.top - height - 10;
+          if (top < margin) top = Math.min(window.innerHeight - height - margin, anchor.bottom + 10);
+          top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+          panel.style.left = left + 'px';
+          panel.style.top = top + 'px';
+        };
+        modal._sonixSubtitlePositionHandler = positionPopover;
+        modal._sonixSubtitleOutsideHandler = event => {
+          if (!panel?.contains(event.target) && event.target !== trigger) closeAllModals();
+        };
+        window.addEventListener('resize', positionPopover);
+        window.addEventListener('scroll', positionPopover, true);
+        document.addEventListener('pointerdown', modal._sonixSubtitleOutsideHandler, true);
+      }
 
       modal.setAttribute('aria-hidden', 'false');
       modal.classList.add('active');
-      if (isFullscreenAudioDialog && videoPlaybackController) {
+      if ((isFullscreenAudioDialog || isSubtitlePopover) && videoPlaybackController) {
         videoPlaybackController.showPlaybackControls();
       }
 
       const focusDialog = () => {
         if (!modal.classList.contains('active')) return;
+        if (isSubtitlePopover && modal._sonixSubtitlePositionHandler) modal._sonixSubtitlePositionHandler();
         const firstFocusable = modal.querySelector('.focusable:not([disabled])');
         if (firstFocusable && remoteNavigator) remoteNavigator.focusElement(firstFocusable);
       };
-      if (isFullscreenAudioDialog) {
-        // Force WebView to commit the body-level overlay before remote focus is
-        // calculated; otherwise some TV WebViews report zero-sized focus targets.
+      if (isFullscreenAudioDialog || isSubtitlePopover) {
         requestAnimationFrame(() => {
           modal.getBoundingClientRect();
           focusDialog();
@@ -1037,9 +1069,29 @@
 
     function closeAllModals() {
       let closedFullscreenAudio = false;
+      let closedSubtitlePopover = false;
       document.querySelectorAll('.modal-backdrop').forEach(el => {
         if (el.id === 'modal-ext-audio' && el.dataset.sonixFullscreenPortal === 'true') {
           closedFullscreenAudio = true;
+        }
+        if (el.id === 'modal-subtitles' && el.classList.contains('sonix-subtitle-popover')) {
+          closedSubtitlePopover = true;
+          if (el._sonixSubtitlePositionHandler) {
+            window.removeEventListener('resize', el._sonixSubtitlePositionHandler);
+            window.removeEventListener('scroll', el._sonixSubtitlePositionHandler, true);
+            delete el._sonixSubtitlePositionHandler;
+          }
+          if (el._sonixSubtitleOutsideHandler) {
+            document.removeEventListener('pointerdown', el._sonixSubtitleOutsideHandler, true);
+            delete el._sonixSubtitleOutsideHandler;
+          }
+          const panel = el.querySelector('.subtitles-window');
+          if (panel) {
+            panel.style.left = '';
+            panel.style.top = '';
+            panel.style.maxHeight = '';
+          }
+          el.classList.remove('sonix-subtitle-popover');
         }
         el.classList.remove('active');
         el.setAttribute('aria-hidden', 'true');
@@ -1054,11 +1106,11 @@
         }
       });
 
-      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen) {
+      if ((closedFullscreenAudio || closedSubtitlePopover) && videoPlaybackController && videoPlaybackController.isFullscreen) {
         videoPlaybackController.showPlaybackControls();
         if (remoteNavigator) {
-          const audioButton = document.getElementById('btn-open-ext-audio');
-          if (audioButton) remoteNavigator.focusElement(audioButton);
+          const returnButton = document.getElementById(closedSubtitlePopover ? 'btn-toggle-subtitles' : 'btn-open-ext-audio');
+          if (returnButton) remoteNavigator.focusElement(returnButton);
         }
       }
     }
