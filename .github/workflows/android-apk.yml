@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/sonix-playback-preview-controls
+      - fix/mobile-native-video-immersive-fullscreen
   workflow_dispatch:
 
 permissions:
