@@ -230,7 +230,7 @@
     if (!title) throw new Error('اسم المحتوى غير متوفر للبحث.');
     return {item,isSeries,title,season:Number(item.subtitleSeason || item.season || 0),episode:Number(item.subtitleEpisode || item.episode || 0)};
   }
-  function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\\p{L}\\p{N}]/gu,''); }
+  function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
   function resolveImdb(identity) {
     const type = identity.isSeries ? 'series' : 'movie';
     const target = normalizeTitle(identity.title);
