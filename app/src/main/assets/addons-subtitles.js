@@ -5,6 +5,7 @@
   'use strict';
   const STORAGE_KEY = 'sonix_stremio_addons_v1';
   const STYLE_KEY = 'sonix_subtitle_style_v1';
+  const LANGUAGE_KEY = 'sonix_subtitle_language_v1';
   const DEFAULT_ADDONS = [
     { id:'com.linvo.cinemeta', name:'Cinemeta', version:'3.0.14',
       description:'The official addon for movie and series catalogs',
@@ -31,7 +32,12 @@
   let searchText = '';
   let subtitleResults = [];
   let subtitleBusy = false;
-  let subtitleLanguage = 'ar';
+  let subtitleLanguage = (() => {
+    try {
+      const saved = localStorage.getItem(LANGUAGE_KEY);
+      return LANGUAGES.some(language => language.code === saved) ? saved : 'ar';
+    } catch (_) { return 'ar'; }
+  })();
   let currentSubtitleLabel = '';
   let subtitleStyle = readStyle();
 
@@ -394,8 +400,16 @@
         subtitleStyle.background,subtitleStyle.outline,subtitleStyle.position);
     } catch (error) { console.warn('Unable to apply subtitle style',error); }
   }
+  function syncSubtitleLanguageButtons() {
+    document.querySelectorAll('[data-subtitle-language]').forEach(button => {
+      const active = button.dataset.subtitleLanguage === subtitleLanguage;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
   function openSubtitleSearch() {
     subtitleResults = [];
+    syncSubtitleLanguageButtons();
     const title = document.getElementById('subtitle-content-title');
     const status = document.getElementById('subtitle-search-status');
     const list = document.getElementById('subtitle-results');
@@ -461,7 +475,8 @@
       const button = event.target.closest('[data-subtitle-language]');
       if (!button) return;
       subtitleLanguage = button.dataset.subtitleLanguage;
-      document.querySelectorAll('[data-subtitle-language]').forEach(x => x.classList.toggle('active',x === button));
+      try { localStorage.setItem(LANGUAGE_KEY, subtitleLanguage); } catch (_) {}
+      syncSubtitleLanguageButtons();
     });
     document.getElementById('subtitle-stop')?.addEventListener('click', () => {
       if (window.NativePlayback && window.NativePlayback.clearSubtitle) window.NativePlayback.clearSubtitle();
