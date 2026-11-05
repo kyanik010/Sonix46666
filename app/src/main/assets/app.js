@@ -749,20 +749,21 @@
       }
 
       handleBackAction() {
-        // 1. If currently in Fullscreen video mode, exit fullscreen first!
-        if (videoPlaybackController && videoPlaybackController.isFullscreen) {
-          videoPlaybackController.exitFullscreen();
-          return;
-        }
-
-        // 2. If any modal is active, close it!
+        // A dialog opened over fullscreen video owns Back until it is dismissed.
+        // Exiting fullscreen first would strand the audio dialog in the hidden app tree.
         const activeModal = document.querySelector('.modal-backdrop.active');
         if (activeModal) {
           closeAllModals();
           return;
         }
 
-        // 3. If in Live/Movies/Series content browser, return to Home screen!
+        // Only exit fullscreen when no modal is currently covering the video.
+        if (videoPlaybackController && videoPlaybackController.isFullscreen) {
+          videoPlaybackController.exitFullscreen();
+          return;
+        }
+
+        // If in Live/Movies/Series content browser, return to Home screen!
         const currentActiveView = document.querySelector('.view-screen.active');
         if (currentActiveView && currentActiveView.id !== 'view-home') {
           switchView('view-home');
