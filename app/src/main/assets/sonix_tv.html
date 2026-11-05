@@ -307,6 +307,17 @@
               <button id="player-retry-action" class="player-retry-btn focusable">إعادة المحاولة</button>
             </div>
 
+          <!-- VOD timeline: shown only with fullscreen playback controls for movies and episodes. -->
+          <div class="player-timeline" id="player-timeline" aria-label="شريط تقدم الفيلم أو الحلقة">
+            <div class="player-timeline-times" dir="ltr">
+              <span id="player-current-time">00:00</span>
+              <span id="player-total-time">00:00</span>
+            </div>
+            <input id="player-seek-bar" class="player-seek-bar focusable" type="range"
+              min="0" max="1000" step="1" value="0" aria-label="تقدم الفيديو"
+              aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0" tabindex="0">
+          </div>
+
           <!-- Playback-only controls: shown after the native player is ready. -->
           <div class="player-playback-controls" id="player-playback-controls">
             <button id="btn-playback-fav" class="playback-control-btn focusable" title="إضافة للمفضلة">
