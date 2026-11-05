@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Background card -->
+    <path
+        android:fillColor="#0E141B"
+        android:pathData="M0,0 h320 v180 h-320 z" />
+
+    <!-- Subtle radial glow / wave in background -->
+    <path
+        android:fillColor="#15222E"
+        android:pathData="M160,0 C240,0 320,40 320,180 L0,180 C0,40 80,0 160,0 Z" />
+
+    <!-- Glow ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8FB8E8"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.6"
+        android:pathData="M80,90 A45,45 0 1,1 79.9,90 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E0A526"
+        android:strokeWidth="2"
+        android:strokeAlpha="0.5"
+        android:pathData="M80,90 A38,38 0 1,1 79.9,90 Z" />
+
+    <!-- TV Screen Frame -->
+    <path
+        android:fillColor="#15222E"
+        android:strokeColor="#8FB8E8"
+        android:strokeWidth="2.5"
+        android:pathData="M52,66 h56 a8,8 0 0,1 8,8 v36 a8,8 0 0,1 -8,8 h-56 a8,8 0 0,1 -8,-8 v-36 a8,8 0 0,1 8,-8 z" />
+
+    <!-- Antenna -->
+    <path
+        android:strokeColor="#E0A526"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M68,56 L80,66 L92,56" />
+
+    <!-- TV Stand -->
+    <path
+        android:fillColor="#8FB8E8"
+        android:pathData="M77,118 h6 v7 h-6 z" />
+    <path
+        android:fillColor="#8FB8E8"
+        android:pathData="M66,125 h28 v4 h-28 z" />
+
+    <!-- Screen accents -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E0A526"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M66,91 a14,14 0 0,1 0,-18" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8FB8E8"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M74,87 a8,8 0 0,1 0,-10" />
+
+    <!-- Gold Accent Line -->
+    <path
+        android:strokeColor="#E0A526"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M150,70 L280,70" />
+
+    <!-- Blue Subtitle Line -->
+    <path
+        android:strokeColor="#8FB8E8"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M150,84 L250,84" />
+
+    <!-- Secondary Accent Line -->
+    <path
+        android:strokeColor="#C2CBD4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.7"
+        android:pathData="M150,96 L220,96" />
+</vector>
