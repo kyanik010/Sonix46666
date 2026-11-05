@@ -5,6 +5,7 @@ on:
     branches:
       - fix/sonix-playback-preview-controls
       - fix/mobile-native-video-immersive-fullscreen
+      - feature/sonix-external-audio-complete
   workflow_dispatch:
 
 permissions:
