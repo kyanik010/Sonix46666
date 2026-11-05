@@ -307,7 +307,7 @@ class MainActivity : ComponentActivity() {
                 ).also { nativePlayerView = it }
             playerView.apply {
                 setUseController(false)
-                setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT)
+                setResizeMode(if (immersiveVideoFullscreen) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT)
                 setKeepContentOnPlayerReset(true)
                 setShutterBackgroundColor(Color.TRANSPARENT)
                 setBackgroundColor(Color.TRANSPARENT)
@@ -326,6 +326,7 @@ class MainActivity : ComponentActivity() {
                 }
                 isFocusable = false
                 isFocusableInTouchMode = false
+                invalidateOutline()
             }
 
             nativePlayerActive = true
