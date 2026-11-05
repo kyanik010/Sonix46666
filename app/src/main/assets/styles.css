@@ -1141,12 +1141,22 @@
     .player-playback-controls .playback-control-btn:active {
       background: rgba(255,255,255,.07) !important;
     }
-    .player-playback-controls .player-quality-menu {
+    .player-quality-control {
+      position: relative;
+      display: flex;
+      flex: 1 1 0;
+      min-width: 0;
+    }
+    .player-quality-control > #btn-quality {
+      width: 100%;
+      flex: 1 1 auto;
+    }
+    .player-quality-control .player-quality-menu {
       display: none;
       position: absolute;
       right: 0;
       bottom: calc(100% + 7px);
-      width: min(190px, 75%);
+      width: min(190px, calc(100vw - 16px));
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 5px;
       padding: 6px;
