@@ -2,12 +2,15 @@ package com.example
 
 import android.content.Context
 import android.net.Uri
+import android.util.AtomicFile
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import org.json.JSONException
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -100,6 +103,74 @@ class XtreamBridge(context: Context) {
     }
 
     @JavascriptInterface
+    fun saveCatalogCache(server: String, username: String, catalogJson: String): String {
+        return try {
+            val normalizedServer = normalizeServer(server)
+            require(username.isNotBlank()) { "اسم المستخدم غير صالح لحفظ المحتوى" }
+            val catalog = JSONObject(catalogJson)
+            val requiredArrays = listOf(
+                "liveCategories", "liveChannels", "movieCategories",
+                "movies", "seriesCategories", "series"
+            )
+            requiredArrays.forEach { key ->
+                require(catalog.optJSONArray(key) != null) { "بيانات المزامنة غير مكتملة: $key" }
+            }
+            val totalItems = listOf("liveChannels", "movies", "series")
+                .sumOf { catalog.getJSONArray(it).length() }
+            require(totalItems > 0) { "لن يتم حفظ مزامنة فارغة" }
+
+            val envelope = JSONObject()
+                .put("version", 1)
+                .put("server", normalizedServer)
+                .put("username", username.trim())
+                .put("savedAt", System.currentTimeMillis())
+                .put("catalog", catalog)
+
+            val atomicFile = AtomicFile(File(appContext.filesDir, "sonix_provider_cache_v1.json"))
+            var output: FileOutputStream? = null
+            try {
+                output = atomicFile.startWrite()
+                output.write(envelope.toString().toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+                atomicFile.finishWrite(output)
+                output = null
+            } catch (error: Exception) {
+                if (output != null) atomicFile.failWrite(output)
+                throw error
+            }
+            JSONObject().put("success", true).put("saved", true).put("items", totalItems).toString()
+        } catch (error: Exception) {
+            errorResult(error)
+        }
+    }
+
+    @JavascriptInterface
+    fun loadCatalogCache(server: String, username: String): String {
+        return try {
+            val normalizedServer = normalizeServer(server)
+            val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
+            if (!file.isFile) throw IllegalStateException("لا توجد مزامنة محفوظة")
+            val envelope = JSONObject(file.readText(Charsets.UTF_8))
+            require(envelope.optInt("version") == 1) { "إصدار بيانات المزامنة غير مدعوم" }
+            require(envelope.optString("server") == normalizedServer &&
+                envelope.optString("username") == username.trim()) {
+                "بيانات المزامنة تخص اشتراكاً آخر"
+            }
+            val catalog = envelope.optJSONObject("catalog")
+                ?: throw IllegalStateException("ملف المزامنة تالف")
+            JSONObject().put("success", true).put("catalog", catalog).toString()
+        } catch (error: Exception) {
+            errorResult(error)
+        }
+    }
+
+    private fun clearCatalogCache() {
+        File(appContext.filesDir, "sonix_provider_cache_v1.json").delete()
+        File(appContext.filesDir, "sonix_provider_cache_v1.json.bak").delete()
+        File(appContext.filesDir, "sonix_provider_cache_v1.json.new").delete()
+    }
+
+    @JavascriptInterface
     fun savedCredentials(): String {
         return try {
             val credentials = vault.read() ?: return JSONObject().put("success", false).toString()
@@ -116,6 +187,7 @@ class XtreamBridge(context: Context) {
     @JavascriptInterface
     fun logout(): String {
         vault.clear()
+        clearCatalogCache()
         return JSONObject().put("success", true).toString()
     }
 
