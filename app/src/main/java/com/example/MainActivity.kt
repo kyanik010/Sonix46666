@@ -54,6 +54,8 @@ class MainActivity : ComponentActivity() {
     private var rootContainer: FrameLayout? = null
     private var nativePlayer: ExoPlayer? = null
     private var nativePlayerView: PlayerView? = null
+    private var nativeVideoStreamType: String? = null
+    private var nativeVideoStreamId: String? = null
     private var nativePlayerCornerRadiusPx = 0f
     @Volatile private var immersiveVideoFullscreen = false
     private var resumeNativePlayerAfterPause = false
@@ -159,6 +161,8 @@ class MainActivity : ComponentActivity() {
                 try {
                     val mediaUri = xtreamBridge.buildPlaybackUri(type, streamId, extension)
                     startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
+                    nativeVideoStreamType = type
+                    nativeVideoStreamId = streamId.trim()
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تجهيز رابط البث من الاشتراك")
@@ -177,6 +181,8 @@ class MainActivity : ComponentActivity() {
                         "رابط البث غير صالح"
                     }
                     startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
+                    nativeVideoStreamType = null
+                    nativeVideoStreamId = null
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تشغيل البث")
@@ -414,8 +420,15 @@ class MainActivity : ComponentActivity() {
         fun attachExternalAudioStream(streamId: String, extension: String) {
             runOnUiThread {
                 try {
-                    val mediaUri = xtreamBridge.buildPlaybackUri("live", streamId, extension)
-                    attachExternalAudioInternal(mediaUri.toString())
+                    val normalizedStreamId = streamId.trim()
+                    require(normalizedStreamId.isNotBlank()) { "معرف القناة الصوتية غير صالح" }
+                    require(!(nativeVideoStreamType == "live" && nativeVideoStreamId == normalizedStreamId)) {
+                        "اختر قناة صوتية مختلفة عن قناة الفيديو"
+                    }
+                    val mediaUri = xtreamBridge.buildPlaybackUri("live", normalizedStreamId, extension)
+                    // The stream IDs have already been compared. Do not compare the
+                    // unresolved/rewritten URL strings for native Xtream streams.
+                    attachExternalAudioInternal(mediaUri.toString(), compareWithVideo = false)
                 } catch (error: Exception) {
                     detachExternalAudioInternal(false)
                     val message = JSONObject.quote(error.message ?: "تعذر استخراج رابط القناة الصوتية من الاشتراك")
@@ -484,16 +497,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun attachExternalAudioInternal(rawUrl: String) {
+    private fun attachExternalAudioInternal(rawUrl: String, compareWithVideo: Boolean = true) {
         val url = rawUrl.trim()
         try {
             val uri = Uri.parse(url)
             require((uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()) {
                 "رابط مصدر الصوت الخارجي غير صالح"
             }
-            val currentVideoUrl = nativePlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
-            require(currentVideoUrl.isNullOrBlank() || !currentVideoUrl.equals(url, ignoreCase = true)) {
-                "مصدر الصوت يجب أن يكون قناة مستقلة عن مصدر الفيديو"
+            if (compareWithVideo) {
+                val currentVideoUrl = nativePlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
+                require(currentVideoUrl.isNullOrBlank() || !currentVideoUrl.equals(url, ignoreCase = true)) {
+                    "مصدر الصوت يجب أن يكون قناة مستقلة عن مصدر الفيديو"
+                }
             }
         } catch (error: Exception) {
             detachExternalAudioInternal(false)
@@ -653,6 +668,8 @@ class MainActivity : ComponentActivity() {
     private fun stopNativePlayer() {
         nativePlayerActive = false
         nativePlayerPlaying = false
+        nativeVideoStreamType = null
+        nativeVideoStreamId = null
         nativePlayer?.let { player ->
             player.stop()
             player.clearMediaItems()
