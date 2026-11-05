@@ -252,7 +252,9 @@ class MainActivity : ComponentActivity() {
             streamType: String?,
             streamId: String?
         ) {
-            stopNativePlayer()
+            // Keep one ExoPlayer and one TextureView-backed PlayerView alive across
+            // item changes. Explicit stop/release requests still use stopNativePlayer().
+            resetNativePlayerForNextItem()
             nativeVideoStreamType = streamType
             nativeVideoStreamId = streamId
             playbackRequestStartedAtMs = SystemClock.elapsedRealtime()
@@ -260,38 +262,49 @@ class MainActivity : ComponentActivity() {
             hasPlaybackReachedReady = false
             firstFrameLogged = false
             liveRecoveryAttempts = 0
+
             val container = rootContainer ?: throw IllegalStateException("واجهة المشغل غير جاهزة")
             nativePlayerCornerRadiusPx = cssPixelsToAndroidPixels(cornerRadiusCssPx.coerceIn(0f, 32f), pixelRatio).toFloat()
             val params = calculatePlayerLayoutParams(left, top, width, height, pixelRatio, container, webView)
                 ?: throw IllegalStateException("مساحة معاينة الفيديو غير صالحة")
 
-            val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent("SONIX-TV/1.0")
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(10000)
             activeMediaUri = mediaUri
             activeSubtitleFile = null
-            val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
-            // Match Night's proven live-IPTV buffering profile to better absorb
-            // short network jitter, including when external audio is also active.
-            val videoLoadControl = DefaultLoadControl.Builder()
-                .setBufferDurationsMs(
-                    3000,   // keep a modest safety buffer for IPTV streams
-                    20000,  // cap buffered media to limit memory use
-                    1000,   // start as soon as one second is buffered
-                    2000    // recover faster after a brief network interruption
-                )
-                .build()
-            val player = ExoPlayer.Builder(this@MainActivity)
-                .setLoadControl(videoLoadControl)
-                .setMediaSourceFactory(mediaSourceFactory)
-                .build()
+
+            val player = nativePlayer ?: run {
+                val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                    .setUserAgent("SONIX-TV/1.0")
+                    .setAllowCrossProtocolRedirects(true)
+                    .setConnectTimeoutMs(15000)
+                    .setReadTimeoutMs(10000)
+                val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
+                // Match Night's proven live-IPTV buffering profile to better absorb
+                // short network jitter, including when external audio is also active.
+                val videoLoadControl = DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        3000,   // keep a modest safety buffer for IPTV streams
+                        20000,  // cap buffered media to limit memory use
+                        1000,   // start as soon as one second is buffered
+                        2000    // recover faster after a brief network interruption
+                    )
+                    .build()
+                ExoPlayer.Builder(this@MainActivity)
+                    .setLoadControl(videoLoadControl)
+                    .setMediaSourceFactory(mediaSourceFactory)
+                    .build()
+                    .also { created ->
+                        nativePlayer = created
+                        attachNativePlayerListeners(created)
+                    }
+            }
+
             // PlayerView owns the video output surface for its complete lifecycle.
             // TextureView is selected because it composes beneath the transparent
             // WebView, allowing the existing HTML controls to remain interactive.
-            val playerView = LayoutInflater.from(this@MainActivity)
-                .inflate(R.layout.native_player_view, container, false) as PlayerView
+            val playerView = nativePlayerView ?: (
+                LayoutInflater.from(this@MainActivity)
+                    .inflate(R.layout.native_player_view, container, false) as PlayerView
+                ).also { nativePlayerView = it }
             playerView.apply {
                 setUseController(false)
                 setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT)
@@ -315,17 +328,50 @@ class MainActivity : ComponentActivity() {
                 isFocusableInTouchMode = false
             }
 
-            nativePlayer = player
-            nativePlayerView = playerView
             nativePlayerActive = true
             nativePlayerPlaying = false
             player.volume = if (externalAudioActive || nativeVideoMuted) 0f else 1f
+            // A reused player must not carry a previous item's forced track override.
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+                .build()
+
             // Use an explicit physical LEFT gravity: START would resolve to RIGHT in RTL
             // layouts and can place the native layer outside the HTML viewport.
             params.gravity = Gravity.TOP or Gravity.LEFT
-            container.addView(playerView, 0, params)
+            if (playerView.parent === container) {
+                playerView.layoutParams = params
+            } else {
+                (playerView.parent as? ViewGroup)?.removeView(playerView)
+                container.addView(playerView, 0, params)
+            }
             playerView.player = player
 
+            val extension = mediaUri.lastPathSegment
+                ?.substringAfterLast('.', "")
+                ?.lowercase()
+                .orEmpty()
+            val mimeType = when (extension) {
+                "m3u8" -> MimeTypes.APPLICATION_M3U8
+                "mpd" -> MimeTypes.APPLICATION_MPD
+                else -> null
+            }
+            val mediaItem = MediaItem.Builder()
+                .setUri(mediaUri)
+                .apply { if (mimeType != null) setMimeType(mimeType) }
+                .build()
+            player.setMediaItem(mediaItem)
+            player.prepare()
+            player.playWhenReady = true
+            android.util.Log.i("SONIXPlayback", "prepare() issued streamType=" + (nativeVideoStreamType ?: "url") + " elapsed=" + (SystemClock.elapsedRealtime() - playbackRequestStartedAtMs) + "ms")
+            playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+            playbackProgressHandler.post(playbackProgressRunnable)
+        }
+
+        private fun attachNativePlayerListeners(player: ExoPlayer) {
             player.addListener(object : Player.Listener {
                 override fun onTracksChanged(tracks: Tracks) {
                     if (activeSubtitleFile == null || pendingSubtitleLabel.isBlank()) return
@@ -425,26 +471,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             })
-
-            val extension = mediaUri.lastPathSegment
-                ?.substringAfterLast('.', "")
-                ?.lowercase()
-                .orEmpty()
-            val mimeType = when (extension) {
-                "m3u8" -> MimeTypes.APPLICATION_M3U8
-                "mpd" -> MimeTypes.APPLICATION_MPD
-                else -> null
-            }
-            val mediaItem = MediaItem.Builder()
-                .setUri(mediaUri)
-                .apply { if (mimeType != null) setMimeType(mimeType) }
-                .build()
-            player.setMediaItem(mediaItem)
-            player.prepare()
-            player.playWhenReady = true
-            android.util.Log.i("SONIXPlayback", "prepare() issued streamType=" + (nativeVideoStreamType ?: "url") + " elapsed=" + (SystemClock.elapsedRealtime() - playbackRequestStartedAtMs) + "ms")
-            playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
-            playbackProgressHandler.post(playbackProgressRunnable)
         }
 
         @android.webkit.JavascriptInterface
@@ -1131,6 +1157,31 @@ class MainActivity : ComponentActivity() {
         } catch (error: Exception) {
             notifyLocalSubtitleResult(false, "", error.message ?: "تعذر قراءة ملف الترجمة")
         }
+    }
+
+    private fun resetNativePlayerForNextItem() {
+        playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+        playbackWatchdogRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+        playbackWatchdogRunnable = null
+        liveRecoveryRunnable?.let(playbackRecoveryHandler::removeCallbacks)
+        liveRecoveryRunnable = null
+        bufferingStartedAtMs = 0L
+        hasPlaybackReachedReady = false
+        liveRecoveryAttempts = 0
+        subtitleGeneration.incrementAndGet()
+        finishSubtitleActivation(false, "تم تغيير المحتوى قبل تفعيل الترجمة")
+        activeMediaUri = null
+        activeSubtitleFile = null
+        nativePlayerActive = false
+        nativePlayerPlaying = false
+        nativeVideoStreamType = null
+        nativeVideoStreamId = null
+        nativePlayer?.let { player ->
+            player.stop()
+            player.clearMediaItems()
+        }
+        webView?.evaluateJavascript(
+            "window.onNativePlaybackStateChanged && window.onNativePlaybackStateChanged(false)", null)
     }
 
     private fun startPlaybackWatchdog(player: ExoPlayer) {
