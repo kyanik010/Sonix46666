@@ -109,6 +109,8 @@
     const host = document.getElementById('addons-list');
     if (!host) return;
     const source = activeTab === 'installed' ? installed : market[activeTab] || [];
+    const manualRow = document.getElementById('addons-manifest-row');
+    if (manualRow) manualRow.hidden = activeTab === 'installed';
     const q = searchText.trim().toLowerCase();
     const visible = source.filter(x => !q || (x.name+' '+x.description+' '+x.id).toLowerCase().includes(q));
     host.replaceChildren();
@@ -204,7 +206,15 @@
     button.disabled = true;
     button.textContent = 'جارٍ التحقق...';
     try {
-      if (addon.configurationRequired) throw new Error('هذه الإضافة تتطلب إعداداً خارجياً قبل التثبيت.');
+      if (addon.configurationRequired || addon.url.includes('/[config]/')) {
+        let configureUrl = addon.configureUrl || addon.url.replace('/[config]','').replace(/\/manifest\.json$/,'').replace(/\/$/,'') + '/configure';
+        const bridge = window.AndroidBridge;
+        if (bridge && bridge.openExternalUrl) bridge.openExternalUrl(configureUrl);
+        if (typeof showToast === 'function') showToast('افتح صفحة إعداد الإضافة، ثم ثبّت رابط Manifest الناتج من هذا القسم.');
+        button.disabled = false;
+        button.textContent = 'تثبيت';
+        return;
+      }
       const manifest = JSON.parse(nativeText(addon.url));
       if (!manifest || !manifest.id || !manifest.version || !Array.isArray(manifest.resources)) {
         throw new Error('ملف Manifest غير مكتمل أو غير صالح.');
@@ -413,6 +423,22 @@
       searchText = event.target.value || ''; renderAddons();
     });
     document.getElementById('addons-refresh')?.addEventListener('click', () => loadMarket(true));
+    document.getElementById('addons-install-url')?.addEventListener('click', () => {
+      const field = document.getElementById('addons-manifest-url');
+      const value = String(field && field.value || '').trim();
+      if (!/^https?:\/\//i.test(value)) {
+        if (typeof showToast === 'function') showToast('أدخل رابط Manifest صالحاً يبدأ بـ https:// أو http://');
+        return;
+      }
+      const addon = normalizeAddon({id:value,name:value,url:value,resources:[],types:[]},'custom');
+      if (!addon) {
+        if (typeof showToast === 'function') showToast('رابط Manifest غير صالح');
+        return;
+      }
+      const button = document.getElementById('addons-install-url');
+      installAddon(addon,button);
+      if (field) field.value = '';
+    });
     document.getElementById('subtitle-search-button')?.addEventListener('click', searchOnline);
     document.getElementById('subtitle-language-list')?.addEventListener('click', event => {
       const button = event.target.closest('[data-subtitle-language]');
