@@ -351,6 +351,9 @@
     try {
       const identity = activeIdentity();
       if (title) title.textContent = identity.title;
+      const noTracks = !window.NativePlayback || !window.NativePlayback.hasTextTracks || !window.NativePlayback.hasTextTracks();
+      const noStream = document.getElementById('subtitle-no-stream');
+      if (noStream) noStream.style.display = noTracks ? 'block' : 'none';
       if (status) status.textContent = 'اختر اللغة ثم ابحث عن الترجمة عبر الإضافات المثبتة.';
       if (list) list.replaceChildren();
     } catch (error) {
