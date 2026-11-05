@@ -213,7 +213,18 @@ class MainActivity : ComponentActivity() {
                 .setConnectTimeoutMs(15000)
                 .setReadTimeoutMs(30000)
             val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
+            // Match Night's proven live-IPTV buffering profile to better absorb
+            // short network jitter, including when external audio is also active.
+            val videoLoadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    5000,   // minimum buffer: 5 seconds
+                    30000,  // maximum buffer: 30 seconds
+                    2500,   // initial playback buffer: 2.5 seconds
+                    5000    // resume after rebuffering: 5 seconds
+                )
+                .build()
             val player = ExoPlayer.Builder(this@MainActivity)
+                .setLoadControl(videoLoadControl)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
             // PlayerView owns the video output surface for its complete lifecycle.
