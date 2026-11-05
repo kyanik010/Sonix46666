@@ -354,6 +354,10 @@ class MainActivity : ComponentActivity() {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
                         Player.STATE_BUFFERING -> {
+                            if (bufferingStartedAtMs == 0L) {
+                                bufferingStartedAtMs = SystemClock.elapsedRealtime()
+                                android.util.Log.i("SONIXPlayback", "STATE_BUFFERING streamType=" + (nativeVideoStreamType ?: "url"))
+                            }
                             startPlaybackWatchdog(player)
                             webView?.evaluateJavascript(
                                 "window.onNativePlaybackBuffering && window.onNativePlaybackBuffering()", null)
@@ -1168,11 +1172,12 @@ class MainActivity : ComponentActivity() {
                 return@Runnable
             }
             try {
+                val shouldResume = player.playWhenReady
                 bufferingStartedAtMs = SystemClock.elapsedRealtime()
                 player.stop()
                 player.setMediaItem(currentItem, true)
                 player.prepare()
-                player.playWhenReady = true
+                player.playWhenReady = shouldResume
             } catch (error: Exception) {
                 scheduleLiveRecovery(player, error.message ?: "فشلت إعادة الاتصال")
             }
