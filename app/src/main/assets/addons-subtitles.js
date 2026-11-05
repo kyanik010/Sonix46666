@@ -47,12 +47,26 @@
     try { localStorage.setItem(STYLE_KEY, JSON.stringify(subtitleStyle)); } catch (_) {}
     applyStyle();
   }
-  function nativeText(url) {
-    if (!window.NativePlayback || !window.NativePlayback.fetchText) throw new Error('خدمة الاتصال غير متاحة');
-    const raw = window.NativePlayback.fetchText(String(url));
-    const value = JSON.parse(raw || '{}');
-    if (!value.success) throw new Error(value.error || 'تعذر تحميل البيانات');
+  let nativeRequestSequence = 0;
+  const pendingNativeRequests = new Map();
+  function nativeRequest(method, args) {
+    return new Promise((resolve,reject) => {
+      if (!window.NativePlayback || typeof window.NativePlayback[method] !== 'function') {
+        reject(new Error('خدمة الاتصال غير متاحة')); return;
+      }
+      const id = 'sonix_sub_' + (++nativeRequestSequence);
+      pendingNativeRequests.set(id,{resolve,reject});
+      try { window.NativePlayback[method](...args,id); }
+      catch (error) { pendingNativeRequests.delete(id); reject(error); }
+    });
+  }
+  async function nativeText(url) {
+    const value = await nativeRequest('fetchTextAsync',[String(url)]);
     return value.body || '';
+  }
+  async function nativeJson(url) { return JSON.parse(await nativeText(url)); }
+  async function nativeApplySubtitle(url,label) {
+    return nativeRequest('applySubtitleAsync',[String(url),String(label || 'Subtitle')]);
   }
   function parseList(value) {
     if (Array.isArray(value)) return value;
@@ -172,15 +186,15 @@
     const status = document.getElementById('addons-status');
     if (status) status.textContent = 'جارٍ تحميل الإضافات الرسمية والمجتمعية...';
     try {
-      const official = parseList(JSON.parse(nativeText('https://api.strem.io/addonscollection.json')))
+      const official = parseList(await nativeJson('https://api.strem.io/addonscollection.json'))
         .map(x => normalizeAddon(x,'official')).filter(Boolean);
       let community = [];
       try {
-        const data = JSON.parse(nativeText('https://stremio-addons.net/api/v0/addons?sort_by=stars&order=desc&limit=100&page=1'));
+        const data = await nativeJson('https://stremio-addons.net/api/v0/addons?sort_by=stars&order=desc&limit=100&page=1');
         community = parseList(data).map(x => normalizeAddon(x,'community')).filter(Boolean);
       } catch (_) {
         try {
-          const data = JSON.parse(nativeText('https://stremio-addons.com/addon_catalog/all/community.json'));
+          const data = await nativeJson('https://stremio-addons.com/addon_catalog/all/community.json');
           community = parseList(data).map(x => normalizeAddon(x,'community')).filter(Boolean);
         } catch (_) {}
       }
@@ -215,7 +229,7 @@
         button.textContent = 'تثبيت';
         return;
       }
-      const manifest = JSON.parse(nativeText(addon.url));
+      const manifest = await nativeJson(addon.url);
       if (!manifest || !manifest.id || !manifest.version || !Array.isArray(manifest.resources)) {
         throw new Error('ملف Manifest غير مكتمل أو غير صالح.');
       }
@@ -241,33 +255,33 @@
     return {item,isSeries,title,season:Number(item.subtitleSeason || item.season || 0),episode:Number(item.subtitleEpisode || item.episode || 0)};
   }
   function normalizeTitle(value) { return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu,''); }
-  function resolveImdb(identity) {
+  async function resolveImdb(identity) {
     const type = identity.isSeries ? 'series' : 'movie';
     const target = normalizeTitle(identity.title);
     let candidates = [];
     try {
       const url = 'https://v3-cinemeta.strem.io/catalog/' + type + '/top/search=' + encodeURIComponent(identity.title) + '.json';
-      const data = JSON.parse(nativeText(url));
+      const data = await nativeJson(url);
       candidates = data && Array.isArray(data.metas) ? data.metas : [];
     } catch (_) {}
     if (!candidates.some(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')))) {
-      // Match Lumen's fallback: query search-enabled catalogs exposed by installed addons.
-      installed.filter(x => x.enabled !== false).forEach(addon => {
+      // Fallback to search-enabled catalogs installed by the user, as in Lumen.
+      for (const addon of installed.filter(x => x.enabled !== false)) {
         try {
-          const manifest = JSON.parse(nativeText(addon.url));
+          const manifest = await nativeJson(addon.url);
           const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
-          (Array.isArray(manifest.catalogs) ? manifest.catalogs : []).forEach(catalog => {
-            if (catalog.type !== type || !catalog.id) return;
+          for (const catalog of (Array.isArray(manifest.catalogs) ? manifest.catalogs : [])) {
+            if (catalog.type !== type || !catalog.id) continue;
             const extras = Array.isArray(catalog.extra) ? catalog.extra : [];
-            if (!extras.some(extra => extra && extra.name === 'search')) return;
+            if (!extras.some(extra => extra && extra.name === 'search')) continue;
             try {
-              const data = JSON.parse(nativeText(base + '/catalog/' + type + '/' +
-                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(identity.title) + '.json'));
+              const data = await nativeJson(base + '/catalog/' + type + '/' +
+                encodeURIComponent(catalog.id) + '/search=' + encodeURIComponent(identity.title) + '.json');
               if (data && Array.isArray(data.metas)) candidates.push(...data.metas);
             } catch (_) {}
-          });
+          }
         } catch (_) {}
-      });
+      }
     }
     candidates = candidates.filter(x => /^tt\d+$/.test(String(x.imdb_id || x.id || '')));
     candidates.sort((a,b) => {
@@ -298,7 +312,7 @@
     if (status) status.textContent = 'جارٍ البحث في مصادر الترجمة المثبتة...';
     try {
       const identity = activeIdentity();
-      const imdb = resolveImdb(identity);
+      const imdb = await resolveImdb(identity);
       const addons = installed.filter(x => x.enabled !== false && (x.resources || []).some(r => String(r).toLowerCase() === 'subtitles'));
       if (!addons.length) throw new Error('لا توجد إضافات ترجمة مفعّلة. افتح Addons لتثبيت مصدر ترجمة.');
       const results = [];
@@ -306,7 +320,7 @@
         try {
           const base = addon.url.replace(/\/manifest\.json(?:\?.*)?$/,'').replace(/\/+$/,'');
           const url = base + '/subtitles/' + imdb.type + '/' + encodeURIComponent(imdb.resourceId) + '.json';
-          const payload = JSON.parse(nativeText(url));
+          const payload = await nativeJson(url);
           const rows = payload && Array.isArray(payload.subtitles) ? payload.subtitles : [];
           rows.forEach(row => {
             const lang = normalizeLang(row.lang);
@@ -347,7 +361,7 @@
       host.appendChild(button);
     });
   }
-  function applyOnlineSubtitle(index,button) {
+  async function applyOnlineSubtitle(index,button) {
     const entry = subtitleResults[index];
     if (!entry || !window.NativePlayback || !window.NativePlayback.applySubtitle) {
       if (typeof showToast === 'function') showToast('تطبيق الترجمة غير متاح');
@@ -356,7 +370,7 @@
     button.disabled = true;
     button.querySelector('span:last-child').textContent = 'جارٍ التحميل...';
     try {
-      const result = JSON.parse(window.NativePlayback.applySubtitle(entry.url,entry.label) || '{}');
+      const result = await nativeApplySubtitle(entry.url,entry.label);
       if (!result.success) throw new Error(result.error || 'تعذر تحميل الترجمة');
       currentSubtitleLabel = entry.label;
       const status = document.getElementById('subtitle-search-status');
@@ -468,6 +482,16 @@
     openMarketplace,
     applyStyle,
     refresh:loadMarket,
+    onNativeResponse:function (requestId,payload) {
+      const pending = pendingNativeRequests.get(requestId);
+      if (!pending) return;
+      pendingNativeRequests.delete(requestId);
+      try {
+        const value = JSON.parse(payload || '{}');
+        if (!value.success) throw new Error(value.error || 'فشل طلب الشبكة');
+        pending.resolve(value);
+      } catch (error) { pending.reject(error); }
+    },
     onLocalSubtitleResult:function (success,label,message) {
       const status=document.getElementById('subtitle-search-status');
       if (status) status.textContent = success ? 'تمت إضافة الترجمة: '+label : (message || 'تعذر إضافة ملف الترجمة');
