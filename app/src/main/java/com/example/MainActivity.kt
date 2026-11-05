@@ -1195,7 +1195,7 @@ class MainActivity : ComponentActivity() {
                     val supportsFormat = if (frameRate > 0.0) {
                         videoCapabilities.areSizeAndRateSupported(width, height, frameRate)
                     } else {
-                        videoCapabilities.areSizeSupported(width, height)
+                        videoCapabilities.isSizeSupported(width, height)
                     }
                     val acceleration = if (android.os.Build.VERSION.SDK_INT >= 29) {
                         "hardware=" + codecInfo.isHardwareAccelerated
