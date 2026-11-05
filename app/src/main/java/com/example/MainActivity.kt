@@ -20,16 +20,28 @@ import android.graphics.LinearGradient
 import android.graphics.ColorFilter
 import android.graphics.Canvas
 import android.net.Uri
+import android.content.Intent
+import android.graphics.Typeface
+import android.util.TypedValue
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import android.view.ViewGroup
 import android.view.LayoutInflater
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.CaptionStyleCompat
 import android.widget.FrameLayout
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -58,6 +70,35 @@ class MainActivity : ComponentActivity() {
     private var nativeVideoStreamId: String? = null
     private var nativePlayerCornerRadiusPx = 0f
     @Volatile private var immersiveVideoFullscreen = false
+    private var activeMediaUri: Uri? = null
+    private var activeSubtitleFile: File? = null
+    private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
+    private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
+    private val subtitleGeneration = AtomicLong(0)
+    private val subtitleActivationHandler = Handler(Looper.getMainLooper())
+    private val playbackProgressHandler = Handler(Looper.getMainLooper())
+    private val playbackProgressRunnable = object : Runnable {
+        override fun run() {
+            val player = nativePlayer
+            if (player != null && nativePlayerActive) {
+                val rawDuration = player.duration
+                val duration = if (rawDuration == C.TIME_UNSET || rawDuration <= 0L) -1L else rawDuration
+                val position = player.currentPosition.coerceAtLeast(0L)
+                val seekable = player.isCurrentMediaItemSeekable && duration > 0L
+                webView?.evaluateJavascript(
+                    "window.onNativePlaybackProgress && window.onNativePlaybackProgress($position, $duration, $seekable)",
+                    null
+                )
+                playbackProgressHandler.postDelayed(this, 500L)
+            }
+        }
+    }
+    private var subtitleActivationTimeout: Runnable? = null
+    private var pendingSubtitleRequestId: String? = null
+    private var pendingSubtitleLabel = ""
+    private var pendingSubtitleNotifyLocal = false
+    private var subtitlePickerGeneration = 0L
+    private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
     @Volatile private var nativePlayerPlaying = false
@@ -212,15 +253,17 @@ class MainActivity : ComponentActivity() {
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(15000)
                 .setReadTimeoutMs(30000)
+            activeMediaUri = mediaUri
+            activeSubtitleFile = null
             val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
             // Match Night's proven live-IPTV buffering profile to better absorb
             // short network jitter, including when external audio is also active.
             val videoLoadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    5000,   // minimum buffer: 5 seconds
-                    30000,  // maximum buffer: 30 seconds
-                    2500,   // initial playback buffer: 2.5 seconds
-                    5000    // resume after rebuffering: 5 seconds
+                    3000,   // keep a modest safety buffer for IPTV streams
+                    20000,  // cap buffered media to limit memory use
+                    1000,   // start as soon as one second is buffered
+                    2000    // recover faster after a brief network interruption
                 )
                 .build()
             val player = ExoPlayer.Builder(this@MainActivity)
@@ -267,6 +310,30 @@ class MainActivity : ComponentActivity() {
             playerView.player = player
 
             player.addListener(object : Player.Listener {
+                override fun onTracksChanged(tracks: Tracks) {
+                    if (activeSubtitleFile == null || pendingSubtitleLabel.isBlank()) return
+                    val playerNow = nativePlayer ?: return
+                    val expectedLabel = activeSubtitleFile?.nameWithoutExtension ?: return
+                    val candidate = tracks.groups.firstNotNullOfOrNull { group ->
+                        if (group.type != C.TRACK_TYPE_TEXT) return@firstNotNullOfOrNull null
+                        val index = (0 until group.length).firstOrNull { index ->
+                            group.isTrackSupported(index) &&
+                                group.getTrackFormat(index).label?.equals(expectedLabel, ignoreCase = true) == true
+                        } ?: return@firstNotNullOfOrNull null
+                        group to index
+                    } ?: return
+                    val (group, trackIndex) = candidate
+                    if (!group.isTrackSelected(trackIndex)) {
+                        playerNow.trackSelectionParameters = playerNow.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .addOverride(TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex)))
+                            .build()
+                        return
+                    }
+                    finishSubtitleActivation(true, "")
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
                         Player.STATE_BUFFERING -> webView?.evaluateJavascript(
@@ -317,6 +384,8 @@ class MainActivity : ComponentActivity() {
             player.setMediaItem(mediaItem)
             player.prepare()
             player.playWhenReady = true
+            playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+            playbackProgressHandler.post(playbackProgressRunnable)
         }
 
         @android.webkit.JavascriptInterface
@@ -404,6 +473,20 @@ class MainActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun seekTo(positionMs: Long) {
+            runOnUiThread {
+                val player = nativePlayer ?: return@runOnUiThread
+                if (!player.isCurrentMediaItemSeekable) return@runOnUiThread
+                val target = positionMs.coerceAtLeast(0L).let { requested ->
+                    val duration = player.duration
+                    if (duration > 0L) requested.coerceAtMost(duration) else requested
+                }
+                player.seekTo(target)
+                if (externalAudioActive) secondaryAudioPlayer?.seekTo(target)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
         fun setVideoQuality(maxHeight: Int) {
             runOnUiThread {
                 val player = nativePlayer ?: return@runOnUiThread
@@ -413,6 +496,159 @@ class MainActivity : ComponentActivity() {
                     .buildUpon()
                     .setMaxVideoSize(width, height)
                     .build()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun fetchTextAsync(rawUrl: String, requestId: String) {
+            subtitleIoExecutor.execute {
+                val payload = try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الطلب غير صالح" }
+                    val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 12000
+                    connection.readTimeout = 18000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                    connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
+                    try {
+                        val code = connection.responseCode
+                        if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                        val bytes = connection.inputStream.use { it.readBytes() }
+                        require(bytes.size <= 4 * 1024 * 1024) { "استجابة الإضافة أكبر من الحد المسموح" }
+                        JSONObject().put("success", true).put("body", String(bytes, Charsets.UTF_8)).toString()
+                    } finally { connection.disconnect() }
+                } catch (error: Exception) {
+                    JSONObject().put("success", false).put("error", error.message ?: "تعذر الاتصال بمصدر الإضافة").toString()
+                }
+                runOnUiThread { deliverSubtitleResponse(requestId, payload) }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun applySubtitleAsync(rawUrl: String, label: String, requestId: String) {
+            val requestGeneration = subtitleGeneration.incrementAndGet()
+            runOnUiThread {
+                if (requestGeneration == subtitleGeneration.get()) {
+                    finishSubtitleActivation(false, "تم استبدال طلب الترجمة")
+                }
+            }
+            subtitleIoExecutor.execute {
+                var downloaded: File? = null
+                val payload = try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الترجمة غير صالح" }
+                    val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 15000
+                    connection.readTimeout = 25000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                    val bytes = try {
+                        require(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                        connection.inputStream.use { it.readBytes() }
+                    } finally { connection.disconnect() }
+                    require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
+                    val ext = (uri.lastPathSegment ?: "").substringAfterLast('.', "srt").lowercase()
+                    require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الترجمة غير مدعومة" }
+                    val folder = File(cacheDir, "subtitles").apply { mkdirs() }
+                    File(folder, "online_${System.currentTimeMillis()}.$ext").also { file ->
+                        FileOutputStream(file).use { it.write(bytes) }
+                        downloaded = file
+                    }
+                    JSONObject().put("success", true).toString()
+                } catch (error: Exception) {
+                    JSONObject().put("success", false).put("error", error.message ?: "تعذر تنزيل الترجمة").toString()
+                }
+                runOnUiThread {
+                    if (requestGeneration != subtitleGeneration.get()) {
+                        deliverSubtitleResponse(requestId, JSONObject().put("success", false)
+                            .put("error", "تغير المحتوى قبل اكتمال تحميل الترجمة").toString())
+                    } else if (downloaded != null) {
+                        attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false, requestId)
+                    } else {
+                        deliverSubtitleResponse(requestId, payload)
+                    }
+                }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickSubtitle() {
+            runOnUiThread {
+                try {
+                    subtitlePickerGeneration = subtitleGeneration.incrementAndGet()
+                    finishSubtitleActivation(false, "تم اختيار ملف ترجمة جديد")
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
+                            "application/x-subrip", "text/vtt", "text/plain",
+                            "application/x-ass", "application/ttml+xml", "application/xml"
+                        ))
+                    }
+                    startActivityForResult(intent, subtitlePickerRequestCode)
+                } catch (error: Exception) {
+                    notifyLocalSubtitleResult(false, "", error.message ?: "تعذر فتح مدير الملفات")
+                }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun hasTextTracks(): Boolean {
+            return try {
+                nativePlayer?.currentTracks?.groups?.any { it.type == C.TRACK_TYPE_TEXT } == true
+            } catch (_: Exception) { false }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun clearSubtitle() {
+            runOnUiThread {
+                subtitleGeneration.incrementAndGet()
+                finishSubtitleActivation(false, "تم إيقاف الترجمة")
+                activeSubtitleFile = null
+                nativePlayer?.let { player ->
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                }
+                rebuildCurrentMediaItem(null)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun setSubtitleStyle(font: String, size: String, color: String, background: String, outline: String, position: String) {
+            runOnUiThread {
+                val subtitleView = nativePlayerView?.subtitleView ?: return@runOnUiThread
+                val foreground = try { android.graphics.Color.parseColor(color) } catch (_: Exception) { android.graphics.Color.WHITE }
+                val backgroundColor = when (background) {
+                    "translucent" -> android.graphics.Color.argb(150, 0, 0, 0)
+                    "solid" -> android.graphics.Color.BLACK
+                    else -> android.graphics.Color.TRANSPARENT
+                }
+                val edgeType = when (outline) {
+                    "outline" -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+                    "shadow" -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+                    else -> CaptionStyleCompat.EDGE_TYPE_NONE
+                }
+                val family = when (font) {
+                    "Aref Ruqaa", "Amiri", "Noto Naskh" -> "serif"
+                    "Lalezar", "Changa", "Noto Kufi" -> "sans-serif-condensed"
+                    "Marhey", "Rakkas", "Lemonada" -> "casual"
+                    else -> "sans-serif"
+                }
+                val typeface = loadSubtitleTypeface(font) ?: Typeface.create(family, Typeface.BOLD)
+                subtitleView.setApplyEmbeddedStyles(false)
+                subtitleView.setStyle(CaptionStyleCompat(
+                    foreground, backgroundColor, android.graphics.Color.TRANSPARENT,
+                    edgeType, android.graphics.Color.BLACK, typeface
+                ))
+                val textSize = size.toFloatOrNull()?.coerceIn(14f, 42f) ?: 24f
+                subtitleView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+                subtitleView.setBottomPaddingFraction(when (position) {
+                    "raised" -> 0.18f
+                    "middle" -> 0.42f
+                    else -> 0.08f
+                })
             }
         }
 
@@ -676,7 +912,174 @@ class MainActivity : ComponentActivity() {
         secondaryAudioPlayer = null
     }
 
+    private fun deliverSubtitleResponse(requestId: String, payload: String) {
+        val js = "window.SonixSubtitles && window.SonixSubtitles.onNativeResponse(" +
+            JSONObject.quote(requestId) + "," + JSONObject.quote(payload) + ")"
+        webView?.evaluateJavascript(js, null)
+    }
+
+    private fun loadSubtitleTypeface(font: String): Typeface? {
+        subtitleTypefaceCache[font]?.let { return it }
+        val source = when (font) {
+            "Reem Kufi" -> "arabic-fonts-01.b64" to "reem_kufi"
+            "Amiri" -> "arabic-fonts-01.b64" to "amiri"
+            "Aref Ruqaa" -> "arabic-fonts-02.b64" to "aref_ruqaa"
+            "Lalezar" -> "arabic-fonts-02.b64" to "lalezar"
+            "Marhey" -> "arabic-fonts-03.b64" to "marhey"
+            "Rakkas" -> "arabic-fonts-03.b64" to "rakkas"
+            "Changa" -> "arabic-fonts-04.b64" to "changa"
+            "Noto Naskh" -> "arabic-fonts-04.b64" to "noto_naskh_arabic"
+            "Lemonada" -> "arabic-fonts-05.b64" to "lemonada"
+            "Noto Kufi" -> "arabic-fonts-05.b64" to "noto_kufi_arabic"
+            else -> return null
+        }
+        return try {
+            val lines = assets.open("subtitle-fonts/" + source.first).bufferedReader().use { it.readLines() }
+            val marker = "@@" + source.second + "@@"
+            val index = lines.indexOf(marker)
+            if (index < 0 || index + 1 >= lines.size) return null
+            val bytes = android.util.Base64.decode(lines[index + 1], android.util.Base64.DEFAULT)
+            val directory = File(cacheDir, "subtitle-fonts").apply { mkdirs() }
+            val file = File(directory, source.second + ".ttf")
+            if (!file.exists() || file.length() != bytes.size.toLong()) {
+                FileOutputStream(file).use { it.write(bytes) }
+            }
+            Typeface.createFromFile(file).also { subtitleTypefaceCache[font] = it }
+        } catch (error: Exception) {
+            android.util.Log.w("SONIXSubtitle", "Could not load subtitle font $font", error)
+            null
+        }
+    }
+
+    private fun attachSubtitleFile(
+        file: File,
+        label: String,
+        notify: Boolean = true,
+        requestId: String? = null
+    ) {
+        if (nativePlayer == null || activeMediaUri == null) {
+            val error = "شغّل الفيديو أولاً قبل إضافة الترجمة"
+            if (requestId != null) {
+                deliverSubtitleResponse(requestId, JSONObject().put("success", false).put("error", error).toString())
+            } else if (notify) notifyLocalSubtitleResult(false, label, error)
+            return
+        }
+        if (!file.exists() || file.length() <= 0L) {
+            val error = "ملف الترجمة غير موجود أو فارغ"
+            if (requestId != null) {
+                deliverSubtitleResponse(requestId, JSONObject().put("success", false).put("error", error).toString())
+            } else if (notify) notifyLocalSubtitleResult(false, label, error)
+            return
+        }
+
+        finishSubtitleActivation(false, "تم استبدال طلب الترجمة")
+        activeSubtitleFile = file
+        pendingSubtitleRequestId = requestId
+        pendingSubtitleLabel = label
+        pendingSubtitleNotifyLocal = notify
+        nativePlayer?.let { player ->
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .build()
+        }
+        try {
+            rebuildCurrentMediaItem(file)
+            val timeout = Runnable {
+                finishSubtitleActivation(false, "تعذر على المشغل قراءة مسار الترجمة أو تفعيله")
+            }
+            subtitleActivationTimeout = timeout
+            subtitleActivationHandler.postDelayed(timeout, 15000L)
+        } catch (error: Exception) {
+            finishSubtitleActivation(false, error.message ?: "تعذر تطبيق الترجمة")
+        }
+    }
+
+    private fun finishSubtitleActivation(success: Boolean, message: String) {
+        subtitleActivationTimeout?.let(subtitleActivationHandler::removeCallbacks)
+        subtitleActivationTimeout = null
+        val requestId = pendingSubtitleRequestId
+        val label = pendingSubtitleLabel
+        val notifyLocal = pendingSubtitleNotifyLocal
+        pendingSubtitleRequestId = null
+        pendingSubtitleLabel = ""
+        pendingSubtitleNotifyLocal = false
+        if (requestId != null) {
+            val response = JSONObject().put("success", success)
+            if (!success) response.put("error", message.ifBlank { "تعذر تفعيل الترجمة" })
+            deliverSubtitleResponse(requestId, response.toString())
+        } else if (notifyLocal && label.isNotBlank()) {
+            notifyLocalSubtitleResult(success, label, message)
+        }
+    }
+
+    private fun rebuildCurrentMediaItem(subtitleFile: File?) {
+        val player = nativePlayer ?: return
+        val videoUri = activeMediaUri ?: return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = player.playWhenReady
+        val builder = MediaItem.Builder().setUri(videoUri)
+        if (subtitleFile != null) {
+            val ext = subtitleFile.extension.lowercase()
+            val mime = when (ext) {
+                "vtt" -> "text/vtt"
+                "ssa", "ass" -> "text/x-ssa"
+                "ttml", "xml" -> "application/ttml+xml"
+                else -> "application/x-subrip"
+            }
+            val config = MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(subtitleFile))
+                .setMimeType(mime)
+                .setLanguage("und")
+                .setLabel(subtitleFile.nameWithoutExtension)
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .build()
+            builder.setSubtitleConfigurations(listOf(config))
+        }
+        player.setMediaItem(builder.build(), position)
+        player.prepare()
+        player.playWhenReady = wasPlaying
+    }
+
+    private fun notifyLocalSubtitleResult(success: Boolean, label: String, message: String) {
+        val js = "window.SonixSubtitles && window.SonixSubtitles.onLocalSubtitleResult(" +
+            success + "," + JSONObject.quote(label) + "," + JSONObject.quote(message) + ")"
+        webView?.evaluateJavascript(js, null)
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != subtitlePickerRequestCode || resultCode != RESULT_OK) return
+        if (subtitlePickerGeneration != subtitleGeneration.get()) {
+            notifyLocalSubtitleResult(false, "", "تغير المحتوى قبل اختيار ملف الترجمة")
+            return
+        }
+        val uri = data?.data ?: return
+        try {
+            val name = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            } ?: "subtitle.srt"
+            val ext = name.substringAfterLast('.', "srt").lowercase()
+            require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الملف غير مدعومة" }
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw IllegalStateException("تعذر قراءة الملف")
+            require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
+            val folder = File(cacheDir, "subtitles").apply { mkdirs() }
+            val file = File(folder, "local_${System.currentTimeMillis()}.$ext")
+            FileOutputStream(file).use { it.write(bytes) }
+            attachSubtitleFile(file, name.substringBeforeLast('.', name))
+        } catch (error: Exception) {
+            notifyLocalSubtitleResult(false, "", error.message ?: "تعذر قراءة ملف الترجمة")
+        }
+    }
+
     private fun stopNativePlayer() {
+        playbackProgressHandler.removeCallbacks(playbackProgressRunnable)
+        subtitleGeneration.incrementAndGet()
+        finishSubtitleActivation(false, "توقف تشغيل المحتوى قبل تفعيل الترجمة")
+        activeMediaUri = null
+        activeSubtitleFile = null
         nativePlayerActive = false
         nativePlayerPlaying = false
         nativeVideoStreamType = null
@@ -699,6 +1102,20 @@ class MainActivity : ComponentActivity() {
     }
 
     class WebAppInterface(private val activity: MainActivity) {
+        @android.webkit.JavascriptInterface
+        fun openExternalUrl(rawUrl: String) {
+            activity.runOnUiThread {
+                try {
+                    val uri = Uri.parse(rawUrl.trim())
+                    if (uri.scheme == "https" || uri.scheme == "http") {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    }
+                } catch (error: Exception) {
+                    android.util.Log.w("SONIXAddons", "Unable to open addon configuration URL", error)
+                }
+            }
+        }
+
         @android.webkit.JavascriptInterface
         fun closeApp() {
             activity.runOnUiThread {
@@ -793,6 +1210,7 @@ class MainActivity : ComponentActivity() {
         applyVideoFullscreenSystemUi()
         detachExternalAudioInternal(false)
         stopNativePlayer()
+        subtitleIoExecutor.shutdownNow()
         webView?.destroy()
         webView = null
         super.onDestroy()

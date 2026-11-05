@@ -6,6 +6,7 @@ on:
       - fix/sonix-playback-preview-controls
       - fix/mobile-native-video-immersive-fullscreen
       - feature/sonix-external-audio-complete
+      - feature/stremio-addons-subtitle-system
   workflow_dispatch:
 
 permissions:
@@ -85,6 +86,7 @@ jobs:
               raise SystemExit("Demo data remains in app sources:\n" + "\n".join(found))
           PY
           node --check app/src/main/assets/app.js
+          node --check app/src/main/assets/addons-subtitles.js
 
       - name: Run Security and Lint Checks
         shell: bash

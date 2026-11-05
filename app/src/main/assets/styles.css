@@ -835,7 +835,7 @@
        transforms and stacking contexts cannot trap the video inside the player column.
        Exclude the external-audio dialog from the hidden app tree instead of hiding
        it first and relying on a later visibility override. */
-    body.sonix-video-fullscreen > *:not(.video-viewport):not(#modal-ext-audio) {
+    body.sonix-video-fullscreen > *:not(.video-viewport):not(#modal-ext-audio):not(#modal-subtitles) {
       visibility: hidden !important;
       pointer-events: none !important;
     }
@@ -851,6 +851,39 @@
       visibility: visible !important;
       pointer-events: auto !important;
       z-index: 100001 !important;
+    }
+
+    /* Subtitle tools are a compact popover anchored to the subtitle control,
+       not a full-screen dimming dialog. The JS positions the panel above its trigger. */
+    #modal-subtitles.sonix-subtitle-popover,
+    body.sonix-video-fullscreen > #modal-subtitles.sonix-subtitle-popover.active {
+      position: fixed !important;
+      inset: 0 auto auto 0 !important;
+      display: block !important;
+      width: 0 !important;
+      height: 0 !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
+      background: transparent !important;
+      backdrop-filter: none !important;
+      visibility: visible !important;
+      pointer-events: none !important;
+      z-index: 100002 !important;
+    }
+    #modal-subtitles.sonix-subtitle-popover .subtitles-window {
+      position: fixed !important;
+      width: min(560px, calc(100vw - 16px)) !important;
+      max-height: 78vh !important;
+      margin: 0 !important;
+      border-radius: 14px !important;
+      pointer-events: auto !important;
+      animation: modalFadeIn 0.16s ease-out;
+    }
+    #modal-subtitles.sonix-subtitle-popover .subtitles-body {
+      min-height: 0;
+      overflow-y: auto;
     }
 
     .video-viewport.is-fullscreen {
@@ -1052,6 +1085,82 @@
       pointer-events: none;
       transition: opacity .18s ease, visibility .18s ease;
     }
+    /* VOD progress timeline sits above the control row and is hidden with it. */
+    .video-viewport.has-vod-timeline .player-timeline.visible.available {
+      display: block;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    .player-timeline {
+      display: none;
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 82px;
+      z-index: 9;
+      padding: 7px 10px 4px;
+      border: 1px solid rgba(190, 202, 214, .14);
+      border-radius: 10px;
+      background: rgba(7, 12, 18, .72);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity .18s ease, visibility .18s ease;
+    }
+    .player-timeline-times {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #fff;
+      font: 700 .72rem/1.2 var(--font-family);
+      font-variant-numeric: tabular-nums;
+      direction: ltr;
+      margin-bottom: 2px;
+    }
+    .player-seek-bar {
+      display: block;
+      width: 100%;
+      height: 20px;
+      margin: 0;
+      padding: 0;
+      appearance: none;
+      -webkit-appearance: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      cursor: pointer;
+      direction: ltr;
+      touch-action: pan-x;
+      --progress: 0%;
+    }
+    .player-seek-bar::-webkit-slider-runnable-track {
+      height: 5px;
+      border-radius: 99px;
+      background: linear-gradient(to right, var(--accent-gold) 0%, var(--accent-gold) var(--progress), rgba(255,255,255,.28) var(--progress), rgba(255,255,255,.28) 100%);
+    }
+    .player-seek-bar::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      margin-top: -4.5px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      background: var(--accent-gold);
+      box-shadow: 0 1px 5px rgba(0,0,0,.55);
+    }
+    .player-seek-bar:focus-visible::-webkit-slider-thumb {
+      width: 18px;
+      height: 18px;
+      margin-top: -6.5px;
+      box-shadow: 0 0 0 3px rgba(212,175,90,.28);
+    }
+    .player-seek-bar:disabled { opacity: .45; cursor: default; }
+
     .live-player-col.is-live-mode #ctrl-seek-back,
     .live-player-col.is-live-mode #ctrl-seek-forward,
     .video-viewport.is-live-mode #ctrl-seek-back,
@@ -1990,3 +2099,58 @@
     padding: 7px 9px;
   }
 }
+
+
+/* Stremio Addons marketplace and subtitle search */
+.addons-window,.subtitles-window { width:clamp(340px,68vw,780px); max-height:90vh; }
+.addons-body,.subtitles-body { overscroll-behavior:contain; }
+.addons-tabs,.subtitle-language-list { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; }
+.addons-tab,.addons-refresh,.subtitle-language {
+  border:1px solid var(--border-panel); border-radius:9px; padding:9px 13px;
+  color:var(--text-silver); background:#1C2A38; font:inherit; font-size:.78rem; font-weight:800;
+}
+.addons-tab.active,.subtitle-language.active { color:#101820; background:var(--accent-gold); border-color:var(--accent-gold); }
+.addons-refresh { margin-inline-start:auto; min-width:40px; font-size:1.15rem; }
+.addons-list,.subtitle-results { display:flex; flex-direction:column; gap:9px; margin-top:10px; }
+.addon-card {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px; border:1px solid var(--border-panel); border-radius:12px;
+  background:rgba(10,15,20,.72);
+}
+.addon-card-meta { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.addon-card-meta strong { color:#fff; font-size:.88rem; }
+.addon-card-meta small { color:var(--text-muted); font-size:.68rem; overflow-wrap:anywhere; }
+.addon-card-meta p { margin:0; color:var(--text-silver); font-size:.75rem; }
+.addon-card-actions { display:flex; flex-wrap:wrap; gap:6px; flex-shrink:0; }
+.addon-card-actions button { min-height:34px; padding:7px 10px; font-size:.72rem; }
+.addon-card-actions button:disabled { opacity:.58; cursor:default; }
+.addon-remove { background:rgba(224,83,60,.16); border:1px solid var(--danger-red); color:var(--danger-red); }
+.addon-empty { padding:24px 12px; text-align:center; color:var(--text-muted); font-size:.82rem; }
+.subtitle-content-title { padding:10px 12px; border-radius:10px; background:#151F2A; color:#fff; font-weight:800; }
+.subtitle-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.subtitle-search-heading { margin-top:18px; color:var(--accent-gold); font-size:.9rem; font-weight:900; }
+.subtitle-language { flex:1 1 70px; min-width:60px; }
+.subtitle-search-button { width:100%; margin:4px 0 10px; }
+.subtitle-result {
+  width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:11px 12px; border:1px solid var(--border-panel); border-radius:10px;
+  background:#151F2A; color:#fff; text-align:start; font:inherit; cursor:pointer;
+}
+.subtitle-result:disabled { opacity:.65; }
+.subtitle-result-main { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.subtitle-result-main strong { font-size:.8rem; overflow-wrap:anywhere; }
+.subtitle-result-main small { color:var(--text-muted); font-size:.68rem; }
+.subtitle-result > span:last-child { color:var(--accent-gold); font-size:.75rem; font-weight:900; flex-shrink:0; }
+.subtitle-style-section { margin-top:18px; padding-top:14px; border-top:1px solid var(--border-panel); }
+.subtitle-style-section .settings-row { min-height:46px; }
+@media (max-width:600px) {
+  .addons-window,.subtitles-window { width:96vw; max-height:92vh; }
+  .addon-card { align-items:flex-start; flex-direction:column; }
+  .addon-card-actions { width:100%; }
+}
+
+.addons-manifest-row { display:flex; gap:8px; margin:10px 0; }
+.addons-manifest-row[hidden] { display:none; }
+.addons-manifest-row input { min-width:0; flex:1; }
+.addons-manifest-row button { flex-shrink:0; }
+@media (max-width:600px) { .addons-manifest-row { flex-direction:column; } }

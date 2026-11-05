@@ -168,6 +168,8 @@
         this.isMuted = false;
         this.subtitlesEnabled = sonixSettings.subtitles;
         this.controlsHideTimer = null;
+        this.isSeekingTimeline = false;
+        this.timelineDurationMs = 0;
         this.pendingPlayToken = 0;
         this.viewportResizeObserver = null;
         if (this.viewport && typeof ResizeObserver !== 'undefined') {
@@ -200,6 +202,40 @@
         document.getElementById('ctrl-mute-btn').addEventListener('click', () => this.toggleMute());
         document.getElementById('ctrl-seek-back').addEventListener('click', () => this.seekBy(-10000));
         document.getElementById('ctrl-seek-forward').addEventListener('click', () => this.seekBy(10000));
+        const seekBar = document.getElementById('player-seek-bar');
+        if (seekBar) {
+          seekBar.addEventListener('pointerdown', () => {
+            this.isSeekingTimeline = true;
+            this.showPlaybackControls();
+          });
+          seekBar.addEventListener('input', () => {
+            this.isSeekingTimeline = true;
+            this.showPlaybackControls();
+            const target = this.timelineDurationMs * (Number(seekBar.value) / 1000);
+            const currentLabel = document.getElementById('player-current-time');
+            if (currentLabel) currentLabel.textContent = this.formatTimelineTime(target);
+            seekBar.style.setProperty('--progress', (Number(seekBar.value) / 10) + '%');
+            seekBar.setAttribute('aria-valuenow', seekBar.value);
+          });
+          seekBar.addEventListener('change', () => {
+            const target = this.timelineDurationMs * (Number(seekBar.value) / 1000);
+            this.isSeekingTimeline = false;
+            this.seekToPosition(target);
+          });
+          seekBar.addEventListener('pointercancel', () => { this.isSeekingTimeline = false; });
+          seekBar.addEventListener('focus', () => this.showPlaybackControls());
+          seekBar.addEventListener('keydown', (event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'Left' &&
+                event.key !== 'ArrowRight' && event.key !== 'Right') return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.showPlaybackControls();
+            this.seekBy((event.key === 'ArrowRight' || event.key === 'Right') ? 10000 : -10000);
+          });
+        }
+        window.addEventListener('keydown', () => {
+          if (this.isFullscreen) this.showPlaybackControls();
+        }, true);
         document.getElementById('btn-toggle-subtitles').addEventListener('click', () => this.toggleSubtitles());
         document.getElementById('btn-quality').addEventListener('click', () => this.toggleQualityMenu());
         document.querySelectorAll('.player-quality-option').forEach(option => option.addEventListener('click', () => {
@@ -221,7 +257,7 @@
           this.viewport.addEventListener('touchend', (e) => {
             // Toolbar taps operate their controls; only a double tap on the video
             // surface itself may leave fullscreen.
-            if (e.target.closest('.player-playback-controls, .control-btn, .action-btn')) return;
+            if (e.target.closest('.player-playback-controls, .player-timeline, .control-btn, .action-btn')) return;
             const now = Date.now();
             if (now - lastTapTime < 350 && now - lastTapTime > 40) {
               e.preventDefault();
@@ -241,6 +277,10 @@
         const controls = document.getElementById('player-playback-controls');
         if (!controls) return;
         controls.classList.add('visible');
+        const timeline = document.getElementById('player-timeline');
+        if (timeline && this.viewport && this.viewport.classList.contains('has-vod-timeline')) {
+          timeline.classList.add('visible');
+        }
         if (this.viewport) this.viewport.classList.add('playback-controls-visible');
         if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
         this.controlsHideTimer = setTimeout(() => this.hidePlaybackControls(), 10000);
@@ -251,7 +291,9 @@
         // Otherwise its 10-second auto-hide timer can leave the close action
         // without a visible/focusable return target on TV remotes.
         const audioDialog = document.getElementById('modal-ext-audio');
-        if (this.isFullscreen && audioDialog && audioDialog.classList.contains('active')) {
+        const subtitleDialog = document.getElementById('modal-subtitles');
+        if (this.isFullscreen && ((audioDialog && audioDialog.classList.contains('active')) ||
+            (subtitleDialog && subtitleDialog.classList.contains('active')))) {
           if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
           this.controlsHideTimer = null;
           return;
@@ -259,6 +301,8 @@
         const controls = document.getElementById('player-playback-controls');
         if (controls) {
           controls.classList.remove('visible');
+          const timeline = document.getElementById('player-timeline');
+          if (timeline) timeline.classList.remove('visible');
           const menu = document.getElementById('player-quality-menu');
           if (menu) menu.classList.remove('open');
           const qualityButton = document.getElementById('btn-quality');
@@ -414,6 +458,54 @@
         if(button) button.classList.toggle('is-active',this.isMuted);
       }
 
+      formatTimelineTime(milliseconds) {
+        const totalSeconds = Math.max(0, Math.floor(Number(milliseconds) / 1000));
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const mm = String(minutes).padStart(2, '0');
+        const ss = String(seconds).padStart(2, '0');
+        return hours > 0 ? hours + ':' + mm + ':' + ss : mm + ':' + ss;
+      }
+
+      updateTimeline(positionMs, durationMs, seekable) {
+        const timeline = document.getElementById('player-timeline');
+        const seekBar = document.getElementById('player-seek-bar');
+        if (!timeline || !seekBar) return;
+        const duration = Number(durationMs);
+        const position = Math.max(0, Number(positionMs) || 0);
+        const usable = currentAppMode !== 'live' && !!seekable && Number.isFinite(duration) && duration > 0;
+        timeline.classList.toggle('available', usable);
+        seekBar.disabled = !usable;
+        if (!usable) {
+          this.timelineDurationMs = 0;
+          return;
+        }
+        this.timelineDurationMs = duration;
+        const totalLabel = document.getElementById('player-total-time');
+        if (totalLabel) totalLabel.textContent = this.formatTimelineTime(duration);
+        if (!this.isSeekingTimeline) {
+          const ratio = Math.max(0, Math.min(1, position / duration));
+          seekBar.value = String(Math.round(ratio * 1000));
+          seekBar.setAttribute('aria-valuenow', seekBar.value);
+          seekBar.style.setProperty('--progress', (ratio * 100) + '%');
+          const currentLabel = document.getElementById('player-current-time');
+          if (currentLabel) currentLabel.textContent = this.formatTimelineTime(position);
+        }
+      }
+
+      seekToPosition(positionMs) {
+        if (currentAppMode === 'live' || !window.NativePlayback) return;
+        const target = Math.max(0, Math.min(this.timelineDurationMs, Number(positionMs) || 0));
+        if (typeof window.NativePlayback.seekTo === 'function') {
+          window.NativePlayback.seekTo(Math.round(target));
+        } else if (typeof window.NativePlayback.seekBy === 'function') {
+          const current = this.timelineDurationMs * (Number(document.getElementById('player-seek-bar')?.value || 0) / 1000);
+          window.NativePlayback.seekBy(Math.round(target - current));
+        }
+        this.showPlaybackControls();
+      }
+
       seekBy(offsetMs) {
         if (currentAppMode === 'live') {
           showToast('التقديم والإرجاع متاحان للأفلام والمسلسلات فقط');
@@ -424,16 +516,11 @@
       }
 
       toggleSubtitles() {
-        this.subtitlesEnabled = !this.subtitlesEnabled;
-        sonixSettings.subtitles = this.subtitlesEnabled;
-        saveSonixSettings();
-        if (window.NativePlayback && window.NativePlayback.setSubtitlesEnabled) {
-          window.NativePlayback.setSubtitlesEnabled(this.subtitlesEnabled);
+        if (window.SonixSubtitles && window.SonixSubtitles.openSearch) {
+          window.SonixSubtitles.openSearch();
+          return;
         }
-        const button=document.getElementById('btn-toggle-subtitles');
-        const label=document.getElementById('subtitle-label');
-        if(button) { button.classList.toggle('is-active',this.subtitlesEnabled); button.setAttribute('aria-pressed',String(this.subtitlesEnabled)); }
-        if(label) label.textContent=this.subtitlesEnabled ? 'إخفاء الترجمة' : 'الترجمة';
+        showToast('واجهة الترجمة غير جاهزة');
       }
 
       toggleQualityMenu() {
@@ -534,6 +621,7 @@
         const scoreOverlay = document.getElementById('player-score-overlay');
         const playerPanel = document.querySelector('.live-player-col');
         if (playerPanel) playerPanel.classList.toggle('is-live-mode', currentAppMode === 'live');
+        if (this.viewport) this.viewport.classList.toggle('has-vod-timeline', currentAppMode !== 'live');
         if (scoreOverlay) scoreOverlay.style.display = currentAppMode === 'live' ? 'flex' : 'none';
         if (currentAppMode === 'live') {
           document.getElementById('epg-modal-channel-name').textContent = 'دليل البرامج - ' + item.name;
@@ -672,6 +760,13 @@
             return;
           }
 
+          // Text fields own editing keys. In particular, Backspace/Delete must
+          // edit the focused login credential instead of being interpreted as app Back.
+          const editingElement = document.activeElement;
+          const isEditingText = editingElement &&
+            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
+          if (isEditingText && !['Escape', 'Back'].includes(e.key)) return;
+
           if (videoPlaybackController && videoPlaybackController.currentItem &&
               (e.key === 'ArrowUp' || e.key === 'Up' ||
                e.key === 'ArrowDown' || e.key === 'Down' ||
@@ -681,7 +776,11 @@
             if (videoPlaybackController.isFullscreen && controls && !controls.classList.contains('visible')) {
               e.preventDefault();
               videoPlaybackController.showPlaybackControls();
-              const firstControl = controls.querySelector('.playback-control-btn:not([disabled])');
+              const seekBar = document.getElementById('player-seek-bar');
+              const firstControl = seekBar && !seekBar.disabled &&
+                videoPlaybackController.viewport.classList.contains('has-vod-timeline')
+                ? seekBar
+                : controls.querySelector('.playback-control-btn:not([disabled])');
               if (firstControl) this.focusElement(firstControl);
               return;
             }
@@ -1006,31 +1105,61 @@
 
       const isFullscreenAudioDialog = modalId === 'modal-ext-audio' &&
         !!(videoPlaybackController && videoPlaybackController.isFullscreen);
+      const isSubtitlePopover = modalId === 'modal-subtitles';
 
-      // The fullscreen video is portaled to <body> while #app-container is
-      // deliberately hidden. Move the dialog out of that hidden subtree before
-      // making it active, then let the next frame calculate focusable geometry.
-      if (isFullscreenAudioDialog && modal.parentElement !== document.body) {
+      // Both playback dialogs must escape the hidden app subtree after the
+      // video viewport is portaled to <body> in fullscreen.
+      if ((isFullscreenAudioDialog || isSubtitlePopover) && modal.parentElement !== document.body) {
         modal._sonixOriginalParent = modal.parentElement;
         modal._sonixOriginalNextSibling = modal.nextSibling;
         document.body.appendChild(modal);
         modal.dataset.sonixFullscreenPortal = 'true';
       }
+      if (isSubtitlePopover) {
+        modal.classList.add('sonix-subtitle-popover');
+        const trigger = document.getElementById('btn-toggle-subtitles');
+        const panel = modal.querySelector('.subtitles-window');
+        const positionPopover = () => {
+          if (!modal.classList.contains('active') || !trigger || !panel) return;
+          const anchor = trigger.getBoundingClientRect();
+          const margin = 8;
+          const maxHeight = Math.max(180, Math.min(window.innerHeight * 0.78, 620));
+          panel.style.maxHeight = maxHeight + 'px';
+          const bounds = panel.getBoundingClientRect();
+          const width = bounds.width || Math.min(560, window.innerWidth - margin * 2);
+          const height = Math.min(bounds.height || panel.scrollHeight, maxHeight);
+          const left = Math.max(margin, Math.min(
+            anchor.left + anchor.width / 2 - width / 2,
+            window.innerWidth - width - margin
+          ));
+          let top = anchor.top - height - 10;
+          if (top < margin) top = Math.min(window.innerHeight - height - margin, anchor.bottom + 10);
+          top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+          panel.style.left = left + 'px';
+          panel.style.top = top + 'px';
+        };
+        modal._sonixSubtitlePositionHandler = positionPopover;
+        modal._sonixSubtitleOutsideHandler = event => {
+          if (!panel?.contains(event.target) && event.target !== trigger) closeAllModals();
+        };
+        window.addEventListener('resize', positionPopover);
+        window.addEventListener('scroll', positionPopover, true);
+        document.addEventListener('pointerdown', modal._sonixSubtitleOutsideHandler, true);
+      }
 
       modal.setAttribute('aria-hidden', 'false');
       modal.classList.add('active');
-      if (isFullscreenAudioDialog && videoPlaybackController) {
+      if ((isFullscreenAudioDialog || isSubtitlePopover) && videoPlaybackController) {
         videoPlaybackController.showPlaybackControls();
       }
 
       const focusDialog = () => {
         if (!modal.classList.contains('active')) return;
+        if (isSubtitlePopover && modal._sonixSubtitlePositionHandler) modal._sonixSubtitlePositionHandler();
         const firstFocusable = modal.querySelector('.focusable:not([disabled])');
         if (firstFocusable && remoteNavigator) remoteNavigator.focusElement(firstFocusable);
       };
-      if (isFullscreenAudioDialog) {
-        // Force WebView to commit the body-level overlay before remote focus is
-        // calculated; otherwise some TV WebViews report zero-sized focus targets.
+      if (isFullscreenAudioDialog || isSubtitlePopover) {
         requestAnimationFrame(() => {
           modal.getBoundingClientRect();
           focusDialog();
@@ -1042,9 +1171,29 @@
 
     function closeAllModals() {
       let closedFullscreenAudio = false;
+      let closedSubtitlePopover = false;
       document.querySelectorAll('.modal-backdrop').forEach(el => {
         if (el.id === 'modal-ext-audio' && el.dataset.sonixFullscreenPortal === 'true') {
           closedFullscreenAudio = true;
+        }
+        if (el.id === 'modal-subtitles' && el.classList.contains('sonix-subtitle-popover')) {
+          closedSubtitlePopover = true;
+          if (el._sonixSubtitlePositionHandler) {
+            window.removeEventListener('resize', el._sonixSubtitlePositionHandler);
+            window.removeEventListener('scroll', el._sonixSubtitlePositionHandler, true);
+            delete el._sonixSubtitlePositionHandler;
+          }
+          if (el._sonixSubtitleOutsideHandler) {
+            document.removeEventListener('pointerdown', el._sonixSubtitleOutsideHandler, true);
+            delete el._sonixSubtitleOutsideHandler;
+          }
+          const panel = el.querySelector('.subtitles-window');
+          if (panel) {
+            panel.style.left = '';
+            panel.style.top = '';
+            panel.style.maxHeight = '';
+          }
+          el.classList.remove('sonix-subtitle-popover');
         }
         el.classList.remove('active');
         el.setAttribute('aria-hidden', 'true');
@@ -1059,11 +1208,11 @@
         }
       });
 
-      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen) {
+      if ((closedFullscreenAudio || closedSubtitlePopover) && videoPlaybackController && videoPlaybackController.isFullscreen) {
         videoPlaybackController.showPlaybackControls();
         if (remoteNavigator) {
-          const audioButton = document.getElementById('btn-open-ext-audio');
-          if (audioButton) remoteNavigator.focusElement(audioButton);
+          const returnButton = document.getElementById(closedSubtitlePopover ? 'btn-toggle-subtitles' : 'btn-open-ext-audio');
+          if (returnButton) remoteNavigator.focusElement(returnButton);
         }
       }
     }
@@ -1274,7 +1423,10 @@
             card.addEventListener('click',()=>{
               const ext=ep.container_extension || 'mp4';
               closeAllModals();
-              selectItem({...item,seriesId:null,id:String(ep.id),name:ep.title || item.name,streamDescriptor:{type:'series',id:String(ep.id),ext:ext},streamUrl:'native://stream'});
+              selectItem({...item,seriesId:null,id:String(ep.id),name:ep.title || item.name,
+                subtitleTitle:item.name,seriesTitle:item.name,subtitleSeries:true,
+                subtitleSeason:Number(season),subtitleEpisode:episodeNumber,
+                streamDescriptor:{type:'series',id:String(ep.id),ext:ext},streamUrl:'native://stream'});
             });
             list.appendChild(card);
           });
@@ -1601,23 +1753,13 @@
       if (currentAppMode === 'live' && !item.streamUrl) {
         item.streamDescriptor = { type: 'live', id: String(item.id), ext: item.containerExtension || 'ts' }; item.streamUrl = 'native://stream';
       }
-      if (currentAppMode === 'movies' && window.XtreamBridge) {
-        if (!isOfflineCache) {
-          try {
-            const details=parseNative(window.XtreamBridge.vodInfo(item.id));
-            const info=details.info || {};
-            const movie=details.movie_data || {};
-            item.desc=info.plot || item.desc || '';
-            item.rating=info.rating || item.rating || '';
-            item.logo=info.movie_image || item.logo || '';
-            item.containerExtension=movie.container_extension || item.containerExtension || 'mp4';
-            const selectedRow = Array.from(document.querySelectorAll('.channel-row'))
-              .find(row => row.dataset.itemId === String(item.id));
-            if (selectedRow) setProviderImage(selectedRow.querySelector('.channel-logo-box'), item.logo, item.name, item.logoText || '');
-          } catch (error) { console.warn('VOD details unavailable',error); }
-        }
+      if (currentAppMode === 'movies') {
+        // The VOD catalogue already contains the stream extension and basic
+        // metadata. Do not make a synchronous get_vod_info HTTP request here:
+        // it blocks selection and delays playback before ExoPlayer even starts.
         if (!item.streamUrl) {
-          item.streamDescriptor = { type: 'movie', id: String(item.id), ext: item.containerExtension || 'mp4' }; item.streamUrl = 'native://stream';
+          item.streamDescriptor = { type: 'movie', id: String(item.id), ext: item.containerExtension || 'mp4' };
+          item.streamUrl = 'native://stream';
         }
       }
       if (!item.streamUrl) { showToast('رابط التشغيل غير متوفر من الخادم'); return; }
@@ -1687,10 +1829,14 @@
     window.onNativePlaybackReady = function() {
       if (videoPlaybackController) {
         videoPlaybackController.hideLoader();
+        if (window.SonixSubtitles && window.SonixSubtitles.applyStyle) window.SonixSubtitles.applyStyle();
         const panel=document.querySelector('.live-player-col'); if(panel) panel.classList.add('has-active-playback');
       }
     };
     window.onNativePlaybackStateChanged = function(isPlaying) { if (videoPlaybackController) videoPlaybackController.updatePlaybackState(!!isPlaying); };
+    window.onNativePlaybackProgress = function(positionMs, durationMs, seekable) {
+      if (videoPlaybackController) videoPlaybackController.updateTimeline(positionMs, durationMs, !!seekable);
+    };
     window.onNativePlaybackEnded = function() { if (videoPlaybackController) videoPlaybackController.updatePlaybackState(false); };
     window.onNativePlaybackError = function(message) {
       const panel=document.querySelector('.live-player-col'); if(panel) panel.classList.remove('has-active-playback');
@@ -1827,30 +1973,19 @@
       });
 
       try {
+        // Credentials are kept in the encrypted native vault and the last
+        // successfully loaded catalogue is already persisted in WebView storage.
+        // Restore the cached screen first; never block startup on provider HTTP calls.
         const saved=parseNative(window.XtreamBridge.savedCredentials());
         document.getElementById('login-server').value=saved.server || '';
         document.getElementById('login-username').value=saved.username || '';
         activeCredentials={server:saved.server,username:saved.username};
-        try {
-          const restored=parseNative(window.XtreamBridge.restoreSession());
-          isOfflineCache=false;
-          updateAccount(restored.user_info);
-          loadXtreamContent();
-          document.getElementById('sonix-login-screen').classList.add('hidden');
-        } catch (restoreError) {
-          // A successful previous login is persistent: never ask for credentials again
-          // merely because the provider is temporarily unreachable or rejects a restore.
-          const hasCache=restoreXtreamCache();
-          isOfflineCache=hasCache;
-          updateAccount({username:saved.username});
-          document.getElementById('sonix-login-screen').classList.add('hidden');
-          if(hasCache) {
-            renderCategories();renderItems();renderAudioSourcePicker();
-            showToast('تعذر الاتصال؛ يتم عرض آخر بيانات مخزنة');
-          } else {
-            showToast(restoreError.message || 'تعذر الاتصال بالاشتراك المحفوظ');
-          }
-        }
+        isOfflineCache=restoreXtreamCache();
+        updateAccount({username:saved.username});
+        document.getElementById('sonix-login-screen').classList.add('hidden');
+        renderCategories();
+        renderItems();
+        renderAudioSourcePicker();
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');

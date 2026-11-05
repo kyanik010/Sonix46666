@@ -307,6 +307,17 @@
               <button id="player-retry-action" class="player-retry-btn focusable">إعادة المحاولة</button>
             </div>
 
+          <!-- VOD timeline: shown only with fullscreen playback controls for movies and episodes. -->
+          <div class="player-timeline" id="player-timeline" aria-label="شريط تقدم الفيلم أو الحلقة">
+            <div class="player-timeline-times" dir="ltr">
+              <span id="player-current-time">00:00</span>
+              <span id="player-total-time">00:00</span>
+            </div>
+            <input id="player-seek-bar" class="player-seek-bar focusable" type="range"
+              min="0" max="1000" step="1" value="0" aria-label="تقدم الفيديو"
+              aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0" tabindex="0">
+          </div>
+
           <!-- Playback-only controls: shown after the native player is ready. -->
           <div class="player-playback-controls" id="player-playback-controls">
             <button id="btn-playback-fav" class="playback-control-btn focusable" title="إضافة للمفضلة">
@@ -591,6 +602,14 @@
           </section>
 
           <section class="settings-section">
+            <div class="settings-section-heading">الإضافات والترجمة</div>
+            <div class="settings-row">
+              <span><strong>Addons</strong><small>تصفح الإضافات الرسمية والمجتمعية وثبّتها وأدرها</small></span>
+              <button id="settings-open-addons" class="action-btn focusable settings-action-primary">فتح الإضافات</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
             <div class="settings-section-heading">الاشتراك والتحديث</div>
             <div class="settings-actions">
               <button id="settings-refresh" class="action-btn focusable settings-action-primary">تحديث بيانات الاشتراك والقوائم</button>
@@ -612,6 +631,97 @@
         <div class="modal-footer">
           <button id="close-settings-footer" class="action-btn focusable" style="background:#1C2A38; color:#fff;">إغلاق</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Stremio Addons Marketplace -->
+    <div id="modal-addons" class="modal-backdrop">
+      <div class="modal-window addons-window">
+        <div class="modal-header">
+          <div class="modal-title"><span>Addons</span></div>
+          <button class="modal-close-btn focusable" onclick="closeAllModals()">&times;</button>
+        </div>
+        <div class="modal-body addons-body">
+          <input id="addons-search" class="search-input focusable" type="search" placeholder="البحث عن إضافة..." />
+          <div class="addons-manifest-row" id="addons-manifest-row" hidden>
+            <input id="addons-manifest-url" class="search-input focusable" type="url" placeholder="رابط Manifest لإضافة أخرى" />
+            <button id="addons-install-url" class="action-btn focusable settings-action-primary">تثبيت من الرابط</button>
+          </div>
+          <div class="addons-tabs" role="tablist">
+            <button class="addons-tab focusable active" data-addon-tab="installed">المثبتة</button>
+            <button class="addons-tab focusable" data-addon-tab="official">الرسمية</button>
+            <button class="addons-tab focusable" data-addon-tab="community">المجتمع</button>
+            <button id="addons-refresh" class="addons-refresh focusable" title="تحديث السوق">↻</button>
+          </div>
+          <div id="addons-status" class="settings-note" aria-live="polite"></div>
+          <div id="addons-list" class="addons-list"></div>
+        </div>
+        <div class="modal-footer"><button class="action-btn focusable settings-action-secondary" onclick="closeAllModals()">إغلاق</button></div>
+      </div>
+    </div>
+
+    <!-- Subtitle Search and Appearance -->
+    <div id="modal-subtitles" class="modal-backdrop">
+      <div class="modal-window subtitles-window">
+        <div class="modal-header">
+          <div class="modal-title"><span>الترجمة</span></div>
+          <button class="modal-close-btn focusable" onclick="closeAllModals()">&times;</button>
+        </div>
+        <div class="modal-body subtitles-body">
+          <div id="subtitle-content-title" class="subtitle-content-title">المحتوى الحالي</div>
+          <div id="subtitle-no-stream" class="settings-note" style="margin-top:8px;">No subtitles in this stream</div>
+          <div class="subtitle-actions">
+            <button id="subtitle-stop" class="action-btn focusable settings-action-secondary">إيقاف</button>
+            <button id="subtitle-add-file" class="action-btn focusable settings-action-secondary">إضافة ملف ترجمة</button>
+          </div>
+          <div class="settings-note">SRT, VTT, SSA, ASS or TTML. no sign-up needed</div>
+          <div class="subtitle-search-heading">Search online</div>
+          <div class="subtitle-language-list" id="subtitle-language-list">
+            <button class="subtitle-language focusable" data-subtitle-language="hi">Hindi</button>
+            <button class="subtitle-language focusable" data-subtitle-language="ur">Urdu</button>
+            <button class="subtitle-language focusable active" data-subtitle-language="ar">Arabic</button>
+            <button class="subtitle-language focusable" data-subtitle-language="en">English</button>
+            <button class="subtitle-language focusable" data-subtitle-language="all">All</button>
+          </div>
+          <button id="subtitle-search-button" class="action-btn focusable settings-action-primary subtitle-search-button">بحث عن الترجمة</button>
+          <div id="subtitle-search-status" class="settings-note" aria-live="polite">اختر اللغة ثم ابحث عن الترجمة عبر الإضافات المثبتة.</div>
+          <div id="subtitle-results" class="subtitle-results"></div>
+          <div class="subtitle-style-section">
+            <div class="settings-section-heading">تخصيص مظهر الترجمة</div>
+            <label class="settings-row" for="subtitle-font"><span><strong>نوع الخط</strong></span>
+              <select id="subtitle-font" class="settings-select focusable">
+                <option>Reem Kufi</option><option>Aref Ruqaa</option><option>Lalezar</option><option>Amiri</option>
+                <option>Rakkas</option><option>Marhey</option><option>Noto Naskh</option><option>Changa</option><option>Noto Kufi</option><option>Lemonada</option>
+              </select>
+            </label>
+            <label class="settings-row" for="subtitle-size"><span><strong>حجم الخط</strong></span>
+              <select id="subtitle-size" class="settings-select focusable">
+                <option value="18">صغير</option><option value="24">متوسط</option><option value="22">متوسط (أصغر)</option><option value="26">كبير</option><option value="32">كبير جداً</option>
+              </select>
+            </label>
+            <label class="settings-row" for="subtitle-color"><span><strong>لون الخط</strong></span>
+              <select id="subtitle-color" class="settings-select focusable">
+                <option value="#FFFFFF">أبيض</option><option value="#FFFF00">أصفر</option><option value="#00FFFF">سماوي</option><option value="#00FF66">أخضر</option>
+              </select>
+            </label>
+            <label class="settings-row" for="subtitle-background"><span><strong>خلفية الترجمة</strong></span>
+              <select id="subtitle-background" class="settings-select focusable">
+                <option value="off">إيقاف</option><option value="translucent">شفافة</option><option value="solid">سوداء</option>
+              </select>
+            </label>
+            <label class="settings-row" for="subtitle-outline"><span><strong>حدود النص والظل</strong></span>
+              <select id="subtitle-outline" class="settings-select focusable">
+                <option value="none">بدون</option><option value="shadow">ظل ناعم</option><option value="outline">حدود قوية</option>
+              </select>
+            </label>
+            <label class="settings-row" for="subtitle-position"><span><strong>موضع الترجمة</strong></span>
+              <select id="subtitle-position" class="settings-select focusable">
+                <option value="bottom">أسفل</option><option value="raised">مرتفعة</option><option value="middle">منتصف الشاشة</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="action-btn focusable settings-action-secondary" onclick="closeAllModals()">إغلاق</button></div>
       </div>
     </div>
 
@@ -686,5 +796,6 @@
        JAVASCRIPT ARCHITECTURE
        ========================================================================== -->
   <script src="app.js"></script>
+  <script src="addons-subtitles.js"></script>
 </body>
 </html>
