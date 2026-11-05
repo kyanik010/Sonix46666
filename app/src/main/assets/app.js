@@ -1600,6 +1600,7 @@
     window.onNativePlaybackReady = function() {
       if (videoPlaybackController) {
         videoPlaybackController.hideLoader();
+        if (window.SonixSubtitles && window.SonixSubtitles.applyStyle) window.SonixSubtitles.applyStyle();
         const panel=document.querySelector('.live-player-col'); if(panel) panel.classList.add('has-active-playback');
       }
     };
