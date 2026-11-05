@@ -20,10 +20,18 @@ import android.graphics.LinearGradient
 import android.graphics.ColorFilter
 import android.graphics.Canvas
 import android.net.Uri
+import android.content.Intent
+import android.graphics.Typeface
+import android.util.TypedValue
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import android.view.ViewGroup
 import android.view.LayoutInflater
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.CaptionStyleCompat
 import android.widget.FrameLayout
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -53,6 +61,9 @@ class MainActivity : ComponentActivity() {
     private var nativePlayer: ExoPlayer? = null
     private var nativePlayerView: PlayerView? = null
     private var nativePlayerCornerRadiusPx = 0f
+    private var activeMediaUri: Uri? = null
+    private var activeSubtitleFile: File? = null
+    private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
     @Volatile private var nativePlayerPlaying = false
@@ -203,6 +214,8 @@ class MainActivity : ComponentActivity() {
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(15000)
                 .setReadTimeoutMs(30000)
+            activeMediaUri = mediaUri
+            activeSubtitleFile = null
             val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
             val player = ExoPlayer.Builder(this@MainActivity)
                 .setMediaSourceFactory(mediaSourceFactory)
@@ -371,6 +384,123 @@ class MainActivity : ComponentActivity() {
                     .buildUpon()
                     .setMaxVideoSize(width, height)
                     .build()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun fetchText(rawUrl: String): String {
+            return try {
+                val uri = Uri.parse(rawUrl.trim())
+                require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الطلب غير صالح" }
+                val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 12000
+                connection.readTimeout = 18000
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
+                try {
+                    val code = connection.responseCode
+                    if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                    val bytes = connection.inputStream.use { it.readBytes() }
+                    require(bytes.size <= 4 * 1024 * 1024) { "استجابة الإضافة أكبر من الحد المسموح" }
+                    JSONObject().put("success", true)
+                        .put("body", String(bytes, Charsets.UTF_8)).toString()
+                } finally { connection.disconnect() }
+            } catch (error: Exception) {
+                JSONObject().put("success", false)
+                    .put("error", error.message ?: "تعذر الاتصال بمصدر الإضافة").toString()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun applySubtitle(rawUrl: String, label: String): String {
+            return try {
+                val uri = Uri.parse(rawUrl.trim())
+                require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) { "رابط الترجمة غير صالح" }
+                val connection = URL(uri.toString()).openConnection() as HttpURLConnection
+                connection.connectTimeout = 15000
+                connection.readTimeout = 25000
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
+                val bytes = try {
+                    require(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                    connection.inputStream.use { it.readBytes() }
+                } finally { connection.disconnect() }
+                require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
+                val ext = (uri.lastPathSegment ?: "").substringAfterLast('.', "srt").lowercase()
+                require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الترجمة غير مدعومة" }
+                val folder = File(cacheDir, "subtitles").apply { mkdirs() }
+                val file = File(folder, "online_${System.currentTimeMillis()}.$ext")
+                FileOutputStream(file).use { it.write(bytes) }
+                runOnUiThread { attachSubtitleFile(file, label.ifBlank { "Online subtitle" }) }
+                JSONObject().put("success", true).toString()
+            } catch (error: Exception) {
+                JSONObject().put("success", false)
+                    .put("error", error.message ?: "تعذر تنزيل الترجمة").toString()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickSubtitle() {
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
+                            "application/x-subrip", "text/vtt", "text/plain",
+                            "application/x-ass", "application/ttml+xml", "application/xml"
+                        ))
+                    }
+                    startActivityForResult(intent, subtitlePickerRequestCode)
+                } catch (error: Exception) {
+                    notifyLocalSubtitleResult(false, "", error.message ?: "تعذر فتح مدير الملفات")
+                }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun clearSubtitle() {
+            runOnUiThread {
+                activeSubtitleFile = null
+                rebuildCurrentMediaItem(null)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun setSubtitleStyle(font: String, size: String, color: String, background: String, outline: String, position: String) {
+            runOnUiThread {
+                val subtitleView = nativePlayerView?.subtitleView ?: return@runOnUiThread
+                val foreground = try { android.graphics.Color.parseColor(color) } catch (_: Exception) { android.graphics.Color.WHITE }
+                val backgroundColor = when (background) {
+                    "translucent" -> android.graphics.Color.argb(150, 0, 0, 0)
+                    "solid" -> android.graphics.Color.BLACK
+                    else -> android.graphics.Color.TRANSPARENT
+                }
+                val edgeType = when (outline) {
+                    "outline" -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+                    "shadow" -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+                    else -> CaptionStyleCompat.EDGE_TYPE_NONE
+                }
+                val family = when (font) {
+                    "Aref Ruqaa", "Amiri", "Noto Naskh" -> "serif"
+                    "Lalezar", "Changa", "Noto Kufi" -> "sans-serif-condensed"
+                    "Marhey", "Rakkas", "Lemonada" -> "casual"
+                    else -> "sans-serif"
+                }
+                subtitleView.setApplyEmbeddedStyles(false)
+                subtitleView.setStyle(CaptionStyleCompat(
+                    foreground, backgroundColor, android.graphics.Color.TRANSPARENT,
+                    edgeType, android.graphics.Color.BLACK, Typeface.create(family, Typeface.BOLD)
+                ))
+                val textSize = size.toFloatOrNull()?.coerceIn(14f, 42f) ?: 24f
+                subtitleView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+                subtitleView.setBottomPaddingFraction(when (position) {
+                    "raised" -> 0.18f
+                    "middle" -> 0.42f
+                    else -> 0.08f
+                })
             }
         }
 
@@ -614,7 +744,76 @@ class MainActivity : ComponentActivity() {
         secondaryAudioPlayer = null
     }
 
+    private fun attachSubtitleFile(file: File, label: String) {
+        if (nativePlayer == null || activeMediaUri == null) {
+            notifyLocalSubtitleResult(false, label, "شغّل الفيديو أولاً قبل إضافة الترجمة")
+            return
+        }
+        activeSubtitleFile = file
+        rebuildCurrentMediaItem(file)
+        notifyLocalSubtitleResult(true, label, "")
+    }
+
+    private fun rebuildCurrentMediaItem(subtitleFile: File?) {
+        val player = nativePlayer ?: return
+        val videoUri = activeMediaUri ?: return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = player.playWhenReady
+        val builder = MediaItem.Builder().setUri(videoUri)
+        if (subtitleFile != null) {
+            val ext = subtitleFile.extension.lowercase()
+            val mime = when (ext) {
+                "vtt" -> "text/vtt"
+                "ssa", "ass" -> "text/x-ssa"
+                "ttml", "xml" -> "application/ttml+xml"
+                else -> "application/x-subrip"
+            }
+            val config = MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(subtitleFile))
+                .setMimeType(mime)
+                .setLanguage("und")
+                .setLabel(subtitleFile.nameWithoutExtension)
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .build()
+            builder.setSubtitleConfigurations(listOf(config))
+        }
+        player.setMediaItem(builder.build(), position)
+        player.prepare()
+        player.playWhenReady = wasPlaying
+    }
+
+    private fun notifyLocalSubtitleResult(success: Boolean, label: String, message: String) {
+        val js = "window.SonixSubtitles && window.SonixSubtitles.onLocalSubtitleResult(" +
+            success + "," + JSONObject.quote(label) + "," + JSONObject.quote(message) + ")"
+        webView?.evaluateJavascript(js, null)
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != subtitlePickerRequestCode || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            val name = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            } ?: "subtitle.srt"
+            val ext = name.substringAfterLast('.', "srt").lowercase()
+            require(ext in setOf("srt", "vtt", "ssa", "ass", "ttml", "xml")) { "صيغة الملف غير مدعومة" }
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw IllegalStateException("تعذر قراءة الملف")
+            require(bytes.isNotEmpty() && bytes.size <= 20 * 1024 * 1024) { "ملف الترجمة فارغ أو أكبر من 20MB" }
+            val folder = File(cacheDir, "subtitles").apply { mkdirs() }
+            val file = File(folder, "local_${System.currentTimeMillis()}.$ext")
+            FileOutputStream(file).use { it.write(bytes) }
+            attachSubtitleFile(file, name.substringBeforeLast('.', name))
+        } catch (error: Exception) {
+            notifyLocalSubtitleResult(false, "", error.message ?: "تعذر قراءة ملف الترجمة")
+        }
+    }
+
     private fun stopNativePlayer() {
+        activeMediaUri = null
+        activeSubtitleFile = null
         nativePlayerActive = false
         nativePlayerPlaying = false
         nativePlayer?.let { player ->
