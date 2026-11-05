@@ -1727,3 +1727,51 @@
       #series-episodes-list .episode-thumbnail { flex-basis:96px; width:96px; }
       #series-episodes-list .episode-card { gap:9px; padding:8px; }
     }
+
+/* Stremio Addons marketplace and subtitle search */
+.addons-window,.subtitles-window { width:clamp(340px,68vw,780px); max-height:90vh; }
+.addons-body,.subtitles-body { overscroll-behavior:contain; }
+.addons-tabs,.subtitle-language-list { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; }
+.addons-tab,.addons-refresh,.subtitle-language {
+  border:1px solid var(--border-panel); border-radius:9px; padding:9px 13px;
+  color:var(--text-silver); background:#1C2A38; font:inherit; font-size:.78rem; font-weight:800;
+}
+.addons-tab.active,.subtitle-language.active { color:#101820; background:var(--accent-gold); border-color:var(--accent-gold); }
+.addons-refresh { margin-inline-start:auto; min-width:40px; font-size:1.15rem; }
+.addons-list,.subtitle-results { display:flex; flex-direction:column; gap:9px; margin-top:10px; }
+.addon-card {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px; border:1px solid var(--border-panel); border-radius:12px;
+  background:rgba(10,15,20,.72);
+}
+.addon-card-meta { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.addon-card-meta strong { color:#fff; font-size:.88rem; }
+.addon-card-meta small { color:var(--text-muted); font-size:.68rem; overflow-wrap:anywhere; }
+.addon-card-meta p { margin:0; color:var(--text-silver); font-size:.75rem; }
+.addon-card-actions { display:flex; flex-wrap:wrap; gap:6px; flex-shrink:0; }
+.addon-card-actions button { min-height:34px; padding:7px 10px; font-size:.72rem; }
+.addon-card-actions button:disabled { opacity:.58; cursor:default; }
+.addon-remove { background:rgba(224,83,60,.16); border:1px solid var(--danger-red); color:var(--danger-red); }
+.addon-empty { padding:24px 12px; text-align:center; color:var(--text-muted); font-size:.82rem; }
+.subtitle-content-title { padding:10px 12px; border-radius:10px; background:#151F2A; color:#fff; font-weight:800; }
+.subtitle-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.subtitle-search-heading { margin-top:18px; color:var(--accent-gold); font-size:.9rem; font-weight:900; }
+.subtitle-language { flex:1 1 70px; min-width:60px; }
+.subtitle-search-button { width:100%; margin:4px 0 10px; }
+.subtitle-result {
+  width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:11px 12px; border:1px solid var(--border-panel); border-radius:10px;
+  background:#151F2A; color:#fff; text-align:start; font:inherit; cursor:pointer;
+}
+.subtitle-result:disabled { opacity:.65; }
+.subtitle-result-main { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.subtitle-result-main strong { font-size:.8rem; overflow-wrap:anywhere; }
+.subtitle-result-main small { color:var(--text-muted); font-size:.68rem; }
+.subtitle-result > span:last-child { color:var(--accent-gold); font-size:.75rem; font-weight:900; flex-shrink:0; }
+.subtitle-style-section { margin-top:18px; padding-top:14px; border-top:1px solid var(--border-panel); }
+.subtitle-style-section .settings-row { min-height:46px; }
+@media (max-width:600px) {
+  .addons-window,.subtitles-window { width:96vw; max-height:92vh; }
+  .addon-card { align-items:flex-start; flex-direction:column; }
+  .addon-card-actions { width:100%; }
+}
