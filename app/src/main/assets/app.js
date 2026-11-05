@@ -1999,13 +1999,29 @@
         document.getElementById('login-username').value=saved.username || '';
         activeCredentials={server:saved.server,username:saved.username};
         isOfflineCache=restoreXtreamCache();
+        const hasCompleteLocalCatalog=isOfflineCache;
         updateAccount({username:saved.username});
         document.getElementById('sonix-login-screen').classList.add('hidden');
         renderCategories();
         renderItems();
         renderAudioSourcePicker();
         const startupStatus=document.getElementById('profile-server-status');
-        if(startupStatus) startupStatus.textContent=isOfflineCache?'تمت استعادة المحتوى المحفوظ محلياً':'المحتوى جاهز';
+        if(startupStatus) startupStatus.textContent=hasCompleteLocalCatalog
+          ? 'تمت استعادة المحتوى المحفوظ محلياً'
+          : 'جارٍ إكمال المزامنة الأولى للمحتوى...';
+        // Only bootstrap when no complete local catalogue exists (e.g. first
+        // launch after upgrading an older build). Normal launches are offline-only.
+        if(!hasCompleteLocalCatalog) {
+          setTimeout(() => {
+            try {
+              loadXtreamContent();
+              if(startupStatus) startupStatus.textContent='تم تحميل المحتوى وحفظ المزامنة';
+            } catch(error) {
+              if(startupStatus) startupStatus.textContent='تعذر إكمال المزامنة الأولى';
+              showToast('تعذر تحميل المحتوى: ' + (error.message || 'تحقق من اتصال الإنترنت'));
+            }
+          }, 350);
+        }
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
