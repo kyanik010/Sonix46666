@@ -91,6 +91,7 @@ dependencies {
   implementation("androidx.media3:media3-ui:1.5.1")
 
   // Core AndroidX and Jetpack Compose libraries
+  implementation(libs.androidx.core.ktx)
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.material.icons.core)
