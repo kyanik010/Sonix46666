@@ -1514,6 +1514,139 @@
       border: 1px solid rgba(143,184,232,0.3);
     }
 
+    /* Dual-audio modal: reference layout, tuned for phone and TV screens. */
+    #modal-ext-audio .modal-window {
+      width: min(760px, calc(100vw - 28px));
+      max-height: 88vh;
+    }
+    #modal-ext-audio .modal-body {
+      padding: 16px;
+      gap: 12px;
+      overscroll-behavior: contain;
+    }
+    #modal-ext-audio .current-source-box {
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #modal-ext-audio .current-source-box > div:first-child {
+      flex: 1 1 220px;
+      min-width: 0;
+    }
+    #modal-ext-audio .current-source-box > div:last-child {
+      display: flex;
+      flex: 0 1 auto;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #modal-ext-audio .audio-source-picker-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    #modal-ext-audio .audio-source-picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    #modal-ext-audio .audio-source-picker-title {
+      color: var(--text-silver);
+      font-size: 0.85rem;
+      font-weight: 800;
+    }
+    #modal-ext-audio .audio-source-search {
+      width: min(240px, 42%);
+      height: 38px;
+      flex: 0 1 240px;
+    }
+    #modal-ext-audio .audio-channel-picker {
+      max-height: clamp(170px, 30vh, 260px);
+      min-height: 150px;
+      gap: 4px;
+      padding: 6px;
+      overscroll-behavior: contain;
+    }
+    #modal-ext-audio .audio-picker-item {
+      min-height: 42px;
+      padding: 9px 12px;
+      gap: 10px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    #modal-ext-audio .audio-picker-item:focus-visible {
+      outline: 2px solid var(--focus-blue);
+      outline-offset: 1px;
+    }
+    #modal-ext-audio .audio-picker-item.active {
+      border-color: rgba(224, 165, 38, 0.55);
+      background: linear-gradient(90deg, rgba(224,165,38,0.12), #1C2A38);
+      color: var(--accent-gold);
+    }
+    @media (max-width: 600px) {
+      #modal-ext-audio {
+        padding: 8px;
+      }
+      #modal-ext-audio .modal-window {
+        width: calc(100vw - 16px);
+        max-height: 92vh;
+        border-radius: 16px;
+      }
+      #modal-ext-audio .modal-header {
+        padding: 12px 14px;
+      }
+      #modal-ext-audio .modal-title {
+        font-size: 0.94rem;
+        gap: 8px;
+      }
+      #modal-ext-audio .modal-body {
+        padding: 12px;
+        gap: 10px;
+      }
+      #modal-ext-audio .current-source-box {
+        align-items: stretch;
+      }
+      #modal-ext-audio .current-source-box > div:first-child,
+      #modal-ext-audio .current-source-box > div:last-child {
+        width: 100%;
+      }
+      #modal-ext-audio .current-source-box > div:last-child > button {
+        flex: 1 1 0;
+        min-height: 40px;
+      }
+      #modal-ext-audio .audio-source-picker-header {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 7px;
+      }
+      #modal-ext-audio .audio-source-search {
+        width: 100%;
+        max-width: none;
+        flex: 1 1 auto;
+        height: 40px;
+      }
+      #modal-ext-audio .delay-section-box {
+        padding: 12px;
+      }
+      #modal-ext-audio .delay-buttons-row {
+        gap: 6px;
+      }
+      #modal-ext-audio .delay-step-btn,
+      #modal-ext-audio .delay-reset-btn {
+        flex: 1 1 28%;
+        min-height: 38px;
+        padding: 7px 8px;
+      }
+      #modal-ext-audio .audio-channel-picker {
+        max-height: 30vh;
+        min-height: 140px;
+      }
+      #modal-ext-audio .modal-footer {
+        padding: 10px 12px;
+      }
+    }
+
     /* EPG Modal */
     .epg-timeline-box {
       display: flex;
