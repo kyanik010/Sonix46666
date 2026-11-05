@@ -1826,7 +1826,7 @@
     let dualAudioEngine;
     let remoteNavigator;
 
-    window.onNativePlaybackBuffering = function() { if (videoPlaybackController) videoPlaybackController.showLoader('جارٍ تخزين البث مؤقتاً...'); };
+    window.onNativePlaybackBuffering = function(message) { if (videoPlaybackController) videoPlaybackController.showLoader(message || 'جارٍ تخزين البث مؤقتاً...'); };
     window.onNativePlaybackReady = function() {
       if (videoPlaybackController) {
         videoPlaybackController.hideLoader();
