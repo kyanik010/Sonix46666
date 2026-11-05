@@ -755,18 +755,21 @@
 
       bindKeyEvents() {
         window.addEventListener('keydown', (e) => {
+          // Native text editors and the TV IME own every key while an editable
+          // control has focus. Back/Escape must never become app navigation here.
+          const editingElement = document.activeElement;
+          const isEditingText = editingElement &&
+            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
+          if (isEditingText) {
+            if (e.key === 'Escape' || e.key === 'Back') e.preventDefault();
+            return;
+          }
+
           const activeModal = document.querySelector('.modal-backdrop.active');
           if (activeModal) {
             this.handleModalKey(e, activeModal);
             return;
           }
-
-          // Text fields own editing keys. In particular, Backspace/Delete must
-          // edit the focused login credential instead of being interpreted as app Back.
-          const editingElement = document.activeElement;
-          const isEditingText = editingElement &&
-            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
-          if (isEditingText && !['Escape', 'Back'].includes(e.key)) return;
 
           if (videoPlaybackController && videoPlaybackController.currentItem &&
               (e.key === 'ArrowUp' || e.key === 'Up' ||
@@ -858,6 +861,18 @@
       }
 
       handleBackAction() {
+        // The login gate is a standalone screen, not a view. Back must not
+        // route around it or open the power dialog while credentials are entered.
+        const loginScreen = document.getElementById('sonix-login-screen');
+        if (loginScreen && !loginScreen.classList.contains('hidden')) return;
+
+        const editingElement = document.activeElement;
+        if (editingElement &&
+            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable)) {
+          editingElement.blur();
+          return;
+        }
+
         // A dialog opened over fullscreen video owns Back until it is dismissed.
         // Exiting fullscreen first would strand the audio dialog in the hidden app tree.
         const activeModal = document.querySelector('.modal-backdrop.active');
@@ -980,6 +995,11 @@
       }
 
       getVisibleFocusableElements() {
+        const loginScreen = document.getElementById('sonix-login-screen');
+        if (loginScreen && !loginScreen.classList.contains('hidden')) {
+          return Array.from(loginScreen.querySelectorAll('.focusable:not([disabled])'))
+            .filter(element => element.getClientRects().length > 0);
+        }
         const activeModal = document.querySelector('.modal-backdrop.active');
         if (activeModal) {
           const selector = '.focusable:not([disabled])';
@@ -1348,7 +1368,9 @@
         isOfflineCache=false;
         updateAccount(result.user_info);
         loadXtreamContent();
-        document.getElementById('sonix-login-screen').classList.add('hidden');
+        const loginScreen = document.getElementById('sonix-login-screen');
+        if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
+        loginScreen.classList.add('hidden');
         document.getElementById('login-password').value='';
         const settingsPassword=document.getElementById('iptv-password'); if(settingsPassword) settingsPassword.value='';
         showToast('تم التحقق من الاشتراك وتحميل محتوى الخادم');
@@ -1362,7 +1384,9 @@
         if(offlineFallback && isNetworkFailure(error) && activeCredentials && restoreXtreamCache()) {
           isOfflineCache=true;
           updateAccount({username:activeCredentials.username});
-          document.getElementById('sonix-login-screen').classList.add('hidden');
+          const loginScreen = document.getElementById('sonix-login-screen');
+          if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
+          loginScreen.classList.add('hidden');
           showToast('تعذر الاتصال؛ يتم عرض آخر بيانات مخزنة');
           renderCategories();renderItems();renderAudioSourcePicker();
         } else {
@@ -1862,6 +1886,17 @@
     };
 
     document.addEventListener('DOMContentLoaded', () => {
+      const syncNativeTextFocus = () => {
+        const active = document.activeElement;
+        const editing = !!(active &&
+          (active.matches('input, textarea, select') || active.isContentEditable));
+        if (window.AndroidBridge && typeof window.AndroidBridge.setTextInputFocused === 'function') {
+          window.AndroidBridge.setTextInputFocused(editing);
+        }
+      };
+      document.addEventListener('focusin', syncNativeTextFocus, true);
+      document.addEventListener('focusout', () => window.setTimeout(syncNativeTextFocus, 0), true);
+
       document.getElementById('login-submit').addEventListener('click', () => performXtreamLogin(
         document.getElementById('login-server').value,
         document.getElementById('login-username').value,
@@ -1945,6 +1980,8 @@
         document.getElementById('login-password').value=password;
         closeAllModals();
         document.getElementById('sonix-login-screen').classList.remove('hidden');
+        const firstLoginField = document.getElementById('login-server');
+        if (firstLoginField && remoteNavigator) remoteNavigator.focusElement(firstLoginField);
         performXtreamLogin(server,username,password,false);
       });
       document.getElementById('btn-search').addEventListener('click', () => openModal('modal-search'));
@@ -2025,6 +2062,8 @@
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
+        const firstLoginField = document.getElementById('login-server');
+        if (firstLoginField && remoteNavigator) remoteNavigator.focusElement(firstLoginField);
       }
 
       // 10. Search Filters
