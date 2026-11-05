@@ -417,6 +417,7 @@
   window.SonixSubtitles = {
     openSearch:openSubtitleSearch,
     openMarketplace,
+    applyStyle,
     refresh:loadMarket,
     onLocalSubtitleResult:function (success,label,message) {
       const status=document.getElementById('subtitle-search-status');
