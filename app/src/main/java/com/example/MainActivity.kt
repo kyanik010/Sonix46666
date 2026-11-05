@@ -301,7 +301,7 @@ class MainActivity : ComponentActivity() {
                         if (group.type != C.TRACK_TYPE_TEXT) return@firstNotNullOfOrNull null
                         val index = (0 until group.length).firstOrNull { index ->
                             group.isTrackSupported(index) &&
-                                group.getTrackFormat(index).label.equals(expectedLabel, ignoreCase = true)
+                                group.getTrackFormat(index).label?.equals(expectedLabel, ignoreCase = true) == true
                         } ?: return@firstNotNullOfOrNull null
                         group to index
                     } ?: return
