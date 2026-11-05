@@ -55,6 +55,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
 
@@ -62,7 +64,10 @@ class MainActivity : ComponentActivity() {
     private var rootContainer: FrameLayout? = null
     private var nativePlayer: ExoPlayer? = null
     private var nativePlayerView: PlayerView? = null
+    private var nativeVideoStreamType: String? = null
+    private var nativeVideoStreamId: String? = null
     private var nativePlayerCornerRadiusPx = 0f
+    @Volatile private var immersiveVideoFullscreen = false
     private var activeMediaUri: Uri? = null
     private var activeSubtitleFile: File? = null
     private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
@@ -173,6 +178,8 @@ class MainActivity : ComponentActivity() {
                 try {
                     val mediaUri = xtreamBridge.buildPlaybackUri(type, streamId, extension)
                     startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
+                    nativeVideoStreamType = type
+                    nativeVideoStreamId = streamId.trim()
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تجهيز رابط البث من الاشتراك")
@@ -191,6 +198,8 @@ class MainActivity : ComponentActivity() {
                         "رابط البث غير صالح"
                     }
                     startPlaybackInternal(mediaUri, left, top, width, height, pixelRatio, cornerRadiusCssPx)
+                    nativeVideoStreamType = null
+                    nativeVideoStreamId = null
                 } catch (error: Exception) {
                     stopNativePlayer()
                     val message = JSONObject.quote(error.message ?: "تعذر تشغيل البث")
@@ -223,7 +232,18 @@ class MainActivity : ComponentActivity() {
             activeMediaUri = mediaUri
             activeSubtitleFile = null
             val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
+            // Match Night's proven live-IPTV buffering profile to better absorb
+            // short network jitter, including when external audio is also active.
+            val videoLoadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    5000,   // minimum buffer: 5 seconds
+                    30000,  // maximum buffer: 30 seconds
+                    2500,   // initial playback buffer: 2.5 seconds
+                    5000    // resume after rebuffering: 5 seconds
+                )
+                .build()
             val player = ExoPlayer.Builder(this@MainActivity)
+                .setLoadControl(videoLoadControl)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
             // PlayerView owns the video output surface for its complete lifecycle.
@@ -316,6 +336,28 @@ class MainActivity : ComponentActivity() {
             player.setMediaItem(mediaItem)
             player.prepare()
             player.playWhenReady = true
+        }
+
+        @android.webkit.JavascriptInterface
+        fun setFullscreen(enabled: Boolean) {
+            runOnUiThread {
+                immersiveVideoFullscreen = enabled
+                applyVideoFullscreenSystemUi()
+                nativePlayerView?.resizeMode = if (enabled) {
+                    // Fill ultrawide phone displays in fullscreen; restore the full frame in preview.
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+                // System-bar visibility changes resize the WebView asynchronously. Re-read
+                // its final viewport after the inset/layout pass and realign the native surface.
+                webView?.postDelayed({
+                    webView?.evaluateJavascript(
+                        "(function(){if(window.videoPlaybackController){window.videoPlaybackController.syncNativeBounds();}})()",
+                        null
+                    )
+                }, 250L)
+            }
         }
 
         @android.webkit.JavascriptInterface
@@ -560,8 +602,15 @@ class MainActivity : ComponentActivity() {
         fun attachExternalAudioStream(streamId: String, extension: String) {
             runOnUiThread {
                 try {
-                    val mediaUri = xtreamBridge.buildPlaybackUri("live", streamId, extension)
-                    attachExternalAudioInternal(mediaUri.toString())
+                    val normalizedStreamId = streamId.trim()
+                    require(normalizedStreamId.isNotBlank()) { "معرف القناة الصوتية غير صالح" }
+                    require(!(nativeVideoStreamType == "live" && nativeVideoStreamId == normalizedStreamId)) {
+                        "اختر قناة صوتية مختلفة عن قناة الفيديو"
+                    }
+                    val mediaUri = xtreamBridge.buildPlaybackUri("live", normalizedStreamId, extension)
+                    // The stream IDs have already been compared. Do not compare the
+                    // unresolved/rewritten URL strings for native Xtream streams.
+                    attachExternalAudioInternal(mediaUri.toString(), compareWithVideo = false)
                 } catch (error: Exception) {
                     detachExternalAudioInternal(false)
                     val message = JSONObject.quote(error.message ?: "تعذر استخراج رابط القناة الصوتية من الاشتراك")
@@ -619,16 +668,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun attachExternalAudioInternal(rawUrl: String) {
+    private fun applyVideoFullscreenSystemUi() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (immersiveVideoFullscreen) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun attachExternalAudioInternal(rawUrl: String, compareWithVideo: Boolean = true) {
         val url = rawUrl.trim()
         try {
             val uri = Uri.parse(url)
             require((uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()) {
                 "رابط مصدر الصوت الخارجي غير صالح"
             }
-            val currentVideoUrl = nativePlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
-            require(currentVideoUrl.isNullOrBlank() || !currentVideoUrl.equals(url, ignoreCase = true)) {
-                "مصدر الصوت يجب أن يكون قناة مستقلة عن مصدر الفيديو"
+            if (compareWithVideo) {
+                val currentVideoUrl = nativePlayer?.currentMediaItem?.localConfiguration?.uri?.toString()
+                require(currentVideoUrl.isNullOrBlank() || !currentVideoUrl.equals(url, ignoreCase = true)) {
+                    "مصدر الصوت يجب أن يكون قناة مستقلة عن مصدر الفيديو"
+                }
             }
         } catch (error: Exception) {
             detachExternalAudioInternal(false)
@@ -905,6 +967,8 @@ class MainActivity : ComponentActivity() {
         activeSubtitleFile = null
         nativePlayerActive = false
         nativePlayerPlaying = false
+        nativeVideoStreamType = null
+        nativeVideoStreamId = null
         nativePlayer?.let { player ->
             player.stop()
             player.clearMediaItems()
@@ -996,6 +1060,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (immersiveVideoFullscreen) window.decorView.post { applyVideoFullscreenSystemUi() }
         webView?.onResume()
         if (resumeNativePlayerAfterPause) nativePlayer?.play()
         if (resumeNativePlayerAfterPause && externalAudioActive) secondaryAudioPlayer?.play()
@@ -1018,7 +1083,16 @@ class MainActivity : ComponentActivity() {
         webView?.onPause()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && immersiveVideoFullscreen) {
+            window.decorView.post { applyVideoFullscreenSystemUi() }
+        }
+    }
+
     override fun onDestroy() {
+        immersiveVideoFullscreen = false
+        applyVideoFullscreenSystemUi()
         detachExternalAudioInternal(false)
         stopNativePlayer()
         subtitleIoExecutor.shutdownNow()

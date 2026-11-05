@@ -277,14 +277,6 @@
             <!-- Secondary Audio Element for Dual Audio System -->
             <audio id="external-audio" preload="auto"></audio>
 
-            <!-- Exit Fullscreen Button (Visible only in fullscreen mode) -->
-            <button id="btn-exit-fullscreen" class="exit-fullscreen-btn focusable" title="تصغير الشاشة">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 9L4 4m0 0v4m0-4h4m6 6l5 5m0 0v-4m0 4h-4M9 15l-5 5m0 0v-4m0 4h4m6-6l5-5m0 0v4m0-4h-4"/>
-              </svg>
-              <span>تصغير الشاشة</span>
-            </button>
-
             <!-- Top Left Match Score / Status Overlay -->
             <div id="player-score-overlay" class="player-match-overlay">
               <span class="live-pill">LIVE</span>
@@ -341,14 +333,16 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M7 10h4m-4 4h3m4-4h3m-3 4h3"/></svg>
               <span id="subtitle-label">ترجمة</span>
             </button>
-            <button id="btn-quality" class="playback-control-btn focusable" title="الجودة" aria-expanded="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>
-              <span id="quality-label">جودة</span>
-            </button>
-            <div class="player-quality-menu" id="player-quality-menu">
-              <button class="player-quality-option focusable" data-quality="1080" aria-pressed="false">1080p</button>
-              <button class="player-quality-option focusable" data-quality="720" aria-pressed="true">720p</button>
-              <button class="player-quality-option focusable" data-quality="480" aria-pressed="false">480p</button>
+            <div class="player-quality-control">
+              <button id="btn-quality" class="playback-control-btn focusable" title="الجودة" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>
+                <span id="quality-label">جودة</span>
+              </button>
+              <div class="player-quality-menu" id="player-quality-menu">
+                <button class="player-quality-option focusable" data-quality="1080" aria-pressed="false">1080p</button>
+                <button class="player-quality-option focusable" data-quality="720" aria-pressed="true">720p</button>
+                <button class="player-quality-option focusable" data-quality="480" aria-pressed="false">480p</button>
+              </div>
             </div>
           </div>
           </div>
@@ -439,10 +433,10 @@
           </div>
 
           <!-- Audio Channel Picker with Search -->
-          <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-              <span style="font-size:0.85rem; font-weight:700; color:var(--text-silver);">اختر قناة صوتية مستقلة من مجموعات beIN SPORTS أو ALWAN:</span>
-              <input type="text" id="audio-src-filter" class="col-search-box focusable" style="width:160px; height:28px;" placeholder="بحث في القنوات..." />
+          <div class="audio-source-picker-section">
+            <div class="audio-source-picker-header">
+              <span class="audio-source-picker-title">اختر قناة صوتية مستقلة من مجموعات beIN SPORTS أو ALWAN</span>
+              <input type="text" id="audio-src-filter" class="col-search-box focusable audio-source-search" placeholder="بحث في القنوات..." />
             </div>
             <div id="audio-channels-list" class="audio-channel-picker">
               <!-- Rendered channel list for audio source selection -->

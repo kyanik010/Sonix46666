@@ -181,7 +181,7 @@
         if (this.viewport) {
           this.viewport.addEventListener('pointerdown', () => this.showPlaybackControls());
           this.viewport.addEventListener('click', (event) => {
-            if (!event.target.closest('.player-playback-controls, .exit-fullscreen-btn')) {
+            if (!event.target.closest('.player-playback-controls')) {
               this.showPlaybackControls();
             }
           });
@@ -216,19 +216,12 @@
         document.getElementById('btn-playback-fav').addEventListener('click', () => {
           if (this.currentItem) toggleFavorite(this.currentItem.id);
         });
-        const exitBtn = document.getElementById('btn-exit-fullscreen');
-        if (exitBtn) exitBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.exitFullscreen();
-        });
         if (this.viewport) {
-          this.viewport.addEventListener('dblclick', (e) => {
-            e.preventDefault();
-            this.toggleFullscreen();
-          });
           let lastTapTime = 0;
           this.viewport.addEventListener('touchend', (e) => {
-            if (e.target.closest('.control-btn') || e.target.closest('.action-btn') || e.target.closest('#btn-exit-fullscreen')) return;
+            // Toolbar taps operate their controls; only a double tap on the video
+            // surface itself may leave fullscreen.
+            if (e.target.closest('.player-playback-controls, .control-btn, .action-btn')) return;
             const now = Date.now();
             if (now - lastTapTime < 350 && now - lastTapTime > 40) {
               e.preventDefault();
@@ -254,6 +247,15 @@
       }
 
       hidePlaybackControls() {
+        // Keep the fullscreen toolbar available behind the external-audio dialog.
+        // Otherwise its 10-second auto-hide timer can leave the close action
+        // without a visible/focusable return target on TV remotes.
+        const audioDialog = document.getElementById('modal-ext-audio');
+        if (this.isFullscreen && audioDialog && audioDialog.classList.contains('active')) {
+          if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
+          this.controlsHideTimer = null;
+          return;
+        }
         const controls = document.getElementById('player-playback-controls');
         if (controls) {
           controls.classList.remove('visible');
@@ -463,12 +465,21 @@
           document.body.classList.add('sonix-video-fullscreen');
           this.isFullscreen = true;
           this.viewport.classList.add('is-fullscreen');
+          // Ask Android to hide system bars and let the native video surface fill
+          // the physical display, not just the WebView's content area.
+          if (window.NativePlayback && typeof window.NativePlayback.setFullscreen === 'function') {
+            window.NativePlayback.setFullscreen(true);
+          }
         } else {
           // Hide controls and dismiss any open quality menu before restoring preview.
           this.hidePlaybackControls();
           this.isFullscreen = false;
           this.viewport.classList.remove('is-fullscreen', 'is-live-mode');
           document.body.classList.remove('sonix-video-fullscreen');
+          // Restore Android system bars and the normal uncropped preview scaling.
+          if (window.NativePlayback && typeof window.NativePlayback.setFullscreen === 'function') {
+            window.NativePlayback.setFullscreen(false);
+          }
           const parent = this.fullscreenOriginalParent;
           if (parent) {
             if (this.fullscreenOriginalNextSibling &&
@@ -494,11 +505,11 @@
         // Wait for the portal/layout transition, then resize the native surface
         // to exactly match the new viewport rectangle.
         requestAnimationFrame(() => this.syncNativeBounds());
-        const exitBtn = document.getElementById('btn-exit-fullscreen');
         if (this.isFullscreen) {
           this.showPlaybackControls();
-          showToast('تم التكبير إلى ملء الشاشة (اضغط تصغير الشاشة للخروج)');
-          if (exitBtn && remoteNavigator) remoteNavigator.focusElement(exitBtn);
+          showToast('تم التكبير إلى ملء الشاشة');
+          const firstControl = document.querySelector('#player-playback-controls .playback-control-btn');
+          if (firstControl && remoteNavigator) remoteNavigator.focusElement(firstControl);
         } else {
           showToast('تم الخروج من وضع ملء الشاشة');
         }
@@ -566,32 +577,48 @@
       }
       setSourceChannel(channel) {
         if (!channel || !channel.id) return;
-        if (this.videoController.currentItem && String(this.videoController.currentItem.id) === String(channel.id)) { showToast('اختر قناة صوتية مختلفة عن قناة الفيديو'); return; }
-        if (!channel.streamUrl) channel.streamUrl = makeStreamUrl('live', channel.id, {container_extension:channel.containerExtension || 'ts'});
-        if (!channel.streamUrl) { showToast('رابط القناة الصوتية غير متوفر من مزود الاشتراك'); return; }
-        const videoUrl = this.videoController.currentItem && this.videoController.currentItem.streamUrl;
-        if (videoUrl && channel.streamUrl.replace(/\/$/, '') === String(videoUrl).trim().replace(/\/$/, '')) { showToast('مصدر الصوت يجب أن يكون قناة مستقلة عن الفيديو'); return; }
-        this.selectedSourceChannel = channel; this.sourceNameEl.textContent = channel.name + ' (' + channel.categoryName + ')';
-        document.querySelectorAll('.audio-picker-item').forEach(el => el.classList.toggle('active', el.dataset.channelId === String(channel.id)));
+        const currentVideo = this.videoController.currentItem;
+        // Compare stable Xtream stream IDs only. streamUrl is deliberately not
+        // used here because native playback stores the placeholder native://stream
+        // on every item, not the resolved provider URL.
+        if (currentVideo && String(currentVideo.id) === String(channel.id)) {
+          showToast('اختر قناة صوتية مختلفة عن قناة الفيديو');
+          return;
+        }
+        this.selectedSourceChannel = channel;
+        this.sourceNameEl.textContent = channel.name + ' (' + channel.categoryName + ')';
+        document.querySelectorAll('.audio-picker-item').forEach(el =>
+          el.classList.toggle('active', el.dataset.channelId === String(channel.id))
+        );
         showToast('تم اختيار ' + channel.name + ' — جارٍ تشغيل الصوت الخارجي');
-        // Selecting a source starts it immediately; the explicit start button
-        // remains available to retry or restart the selected source.
         this.startExternalAudio();
       }
       startExternalAudio() {
         const source = this.selectedSourceChannel;
-        if (!source) { showToast('يرجى اختيار قناة صوتية من beIN SPORTS أو ALWAN أولاً'); return; }
-        if (!source.streamDescriptor) source.streamDescriptor = { type: 'live', id: String(source.id), ext: source.containerExtension || 'ts' }; source.streamUrl = 'native://stream';
-        if (!source.streamUrl || !window.NativePlayback || !window.NativePlayback.attachExternalAudio) { this.setStatus('failed', 'مصدر الصوت غير متاح'); showToast('تعذر الحصول على رابط القناة الصوتية من الاشتراك'); return; }
-        if (!this.isActive) this.originalVideoMuted = !!this.videoController.isMuted;
-        this.videoController.isMuted = true; this.isActive = true; this.setStatus('connecting', 'جارٍ الاتصال...');
-        this.activeBadgeEl.classList.add('visible'); this.btnExtAudio.classList.add('is-active'); this.btnExtAudioText.textContent = 'الصوت الخارجي: ' + source.name;
-        window.NativePlayback.setExternalAudioVolume(this.volume); window.NativePlayback.setExternalAudioSyncOffset(this.delayMs);
-        if (source.streamDescriptor && window.NativePlayback.attachExternalAudioStream) {
-          window.NativePlayback.attachExternalAudioStream(String(source.streamDescriptor.id), source.streamDescriptor.ext);
-        } else {
-          window.NativePlayback.attachExternalAudio(source.streamUrl);
+        if (!source || !source.id) {
+          showToast('يرجى اختيار قناة صوتية من beIN SPORTS أو ALWAN أولاً');
+          return;
         }
+        if (!window.NativePlayback || typeof window.NativePlayback.attachExternalAudioStream !== 'function') {
+          this.setStatus('failed', 'مصدر الصوت غير متاح');
+          showToast('تعذر الحصول على رابط القناة الصوتية من الاشتراك');
+          return;
+        }
+        if (!this.isActive) this.originalVideoMuted = !!this.videoController.isMuted;
+        this.videoController.isMuted = true;
+        this.isActive = true;
+        this.setStatus('connecting', 'جارٍ الاتصال...');
+        this.activeBadgeEl.classList.add('visible');
+        this.btnExtAudio.classList.add('is-active');
+        this.btnExtAudioText.textContent = 'الصوت الخارجي: ' + source.name;
+        window.NativePlayback.setExternalAudioVolume(this.volume);
+        window.NativePlayback.setExternalAudioSyncOffset(this.delayMs);
+        // Pass the real provider stream ID to the native secondary Media3 player.
+        // Never overwrite channel.streamUrl with the shared native://stream placeholder.
+        window.NativePlayback.attachExternalAudioStream(
+          String(source.id),
+          source.containerExtension || 'ts'
+        );
       }
       onBuffering() { if (this.isActive) this.setStatus('connecting', 'جارٍ الاتصال أو إعادة المحاولة...'); }
       onPlaying() { if (this.isActive) { this.setStatus('playing', 'يعمل'); showToast('بدأ تشغيل القناة الصوتية المستقلة عبر Media3'); } }
@@ -726,24 +753,24 @@
       }
 
       handleBackAction() {
-        // 1. If currently in Fullscreen video mode, exit fullscreen first!
-        if (videoPlaybackController && videoPlaybackController.isFullscreen) {
-          videoPlaybackController.exitFullscreen();
-          return;
-        }
-
-        // 2. If any modal is active, close it!
+        // A dialog opened over fullscreen video owns Back until it is dismissed.
+        // Exiting fullscreen first would strand the audio dialog in the hidden app tree.
         const activeModal = document.querySelector('.modal-backdrop.active');
         if (activeModal) {
           closeAllModals();
           return;
         }
 
-        // 3. If in Live/Movies/Series content browser, return to Home screen!
+        // Only exit fullscreen when no modal is currently covering the video.
+        if (videoPlaybackController && videoPlaybackController.isFullscreen) {
+          videoPlaybackController.exitFullscreen();
+          return;
+        }
+
+        // If in Live/Movies/Series content browser, return to Home screen!
         const currentActiveView = document.querySelector('.view-screen.active');
         if (currentActiveView && currentActiveView.id !== 'view-home') {
           switchView('view-home');
-          showToast('العودة إلى الشاشة الرئيسية');
         } else {
           openModal('modal-power');
         }
@@ -970,17 +997,70 @@
       closeAllModals();
       if (modalId === 'modal-settings') syncSonixSettingsControls();
       const modal = document.getElementById(modalId);
-      if (modal) {
-        modal.classList.add('active');
-        const firstFocusable = modal.querySelector('.focusable');
-        if (firstFocusable && remoteNavigator) {
-          remoteNavigator.focusElement(firstFocusable);
-        }
+      if (!modal) return;
+
+      const isFullscreenAudioDialog = modalId === 'modal-ext-audio' &&
+        !!(videoPlaybackController && videoPlaybackController.isFullscreen);
+
+      // The fullscreen video is portaled to <body> while #app-container is
+      // deliberately hidden. Move the dialog out of that hidden subtree before
+      // making it active, then let the next frame calculate focusable geometry.
+      if (isFullscreenAudioDialog && modal.parentElement !== document.body) {
+        modal._sonixOriginalParent = modal.parentElement;
+        modal._sonixOriginalNextSibling = modal.nextSibling;
+        document.body.appendChild(modal);
+        modal.dataset.sonixFullscreenPortal = 'true';
+      }
+
+      modal.setAttribute('aria-hidden', 'false');
+      modal.classList.add('active');
+      if (isFullscreenAudioDialog && videoPlaybackController) {
+        videoPlaybackController.showPlaybackControls();
+      }
+
+      const focusDialog = () => {
+        if (!modal.classList.contains('active')) return;
+        const firstFocusable = modal.querySelector('.focusable:not([disabled])');
+        if (firstFocusable && remoteNavigator) remoteNavigator.focusElement(firstFocusable);
+      };
+      if (isFullscreenAudioDialog) {
+        // Force WebView to commit the body-level overlay before remote focus is
+        // calculated; otherwise some TV WebViews report zero-sized focus targets.
+        requestAnimationFrame(() => {
+          modal.getBoundingClientRect();
+          focusDialog();
+        });
+      } else {
+        focusDialog();
       }
     }
 
     function closeAllModals() {
-      document.querySelectorAll('.modal-backdrop').forEach(el => el.classList.remove('active'));
+      let closedFullscreenAudio = false;
+      document.querySelectorAll('.modal-backdrop').forEach(el => {
+        if (el.id === 'modal-ext-audio' && el.dataset.sonixFullscreenPortal === 'true') {
+          closedFullscreenAudio = true;
+        }
+        el.classList.remove('active');
+        el.setAttribute('aria-hidden', 'true');
+        if (el.dataset.sonixFullscreenPortal === 'true' && el._sonixOriginalParent) {
+          const parent = el._sonixOriginalParent;
+          const next = el._sonixOriginalNextSibling;
+          if (next && next.parentNode === parent) parent.insertBefore(el, next);
+          else parent.appendChild(el);
+          delete el._sonixOriginalParent;
+          delete el._sonixOriginalNextSibling;
+          delete el.dataset.sonixFullscreenPortal;
+        }
+      });
+
+      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen) {
+        videoPlaybackController.showPlaybackControls();
+        if (remoteNavigator) {
+          const audioButton = document.getElementById('btn-open-ext-audio');
+          if (audioButton) remoteNavigator.focusElement(audioButton);
+        }
+      }
     }
 
     let toastTimer = null;
@@ -1014,6 +1094,14 @@
     function makeCategories(rows, prefix) {
       return rows.map(row => ({id:prefix + String(row.category_id), providerId:String(row.category_id), name:row.category_name || 'تصنيف'}));
     }
+    // Keep the two built-in entries first in every content section, including restored offline caches.
+    function orderCategories(categories, allLabel) {
+      const source = Array.isArray(categories) ? categories : [];
+      const all = source.find(category => category && category.id === 'all') || {id:'all',name:allLabel};
+      const favorites = source.find(category => category && category.id === 'favorites') || {id:'favorites',name:'المفضلة'};
+      return [favorites, all, ...source.filter(category =>
+        category && category.id !== 'favorites' && category.id !== 'all')];
+    }
     function makeStreamUrl(type, id, item) {
       if (!activeCredentials || !window.XtreamBridge) return '';
       const ext = (item.container_extension || (type === 'live' ? 'ts' : 'mp4')).replace(/^\./,'');
@@ -1028,17 +1116,17 @@
       const rawLive = nativeArray('get_live_streams');
       const rawMovies = nativeArray('get_vod_streams');
       const rawSeries = nativeArray('get_series');
-      liveCategories = [{id:'all',name:'جميع القنوات'}].concat(lc,[{id:'favorites',name:'المفضلة'}]);
+      liveCategories = orderCategories([{id:'all',name:'جميع القنوات'}, ...lc, {id:'favorites',name:'المفضلة'}], 'جميع القنوات');
       liveChannels = rawLive.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'قناة',
         category:x.category_id == null ? '' : 'live-' + x.category_id,categoryName:categoryName(lc,'live-',x.category_id),
         logo:x.stream_icon || '',logoText:'',streamUrl:'',
         epgChannelId:x.epg_channel_id || '',containerExtension:x.container_extension || 'ts'}));
-      movieCategories = [{id:'all',name:'جميع الأفلام'}].concat(mc,[{id:'favorites',name:'المفضلة'}]);
+      movieCategories = orderCategories([{id:'all',name:'جميع الأفلام'}, ...mc, {id:'favorites',name:'المفضلة'}], 'جميع الأفلام');
       movies = rawMovies.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'فيلم',
         category:x.category_id == null ? '' : 'movie-' + x.category_id,categoryName:categoryName(mc,'movie-',x.category_id),
         logo:x.stream_icon || '',logoText:'',streamUrl:'',
         rating:x.rating || '',desc:x.plot || '',containerExtension:x.container_extension || 'mp4'}));
-      seriesCategories = [{id:'all',name:'جميع المسلسلات'}].concat(sc,[{id:'favorites',name:'المفضلة'}]);
+      seriesCategories = orderCategories([{id:'all',name:'جميع المسلسلات'}, ...sc, {id:'favorites',name:'المفضلة'}], 'جميع المسلسلات');
       series = rawSeries.map((x,i) => ({id:String(x.series_id),seriesId:String(x.series_id),number:i+1,name:x.name || 'مسلسل',
         category:x.category_id == null ? '' : 'series-' + x.category_id,categoryName:categoryName(sc,'series-',x.category_id),
         logo:x.cover || '',logoText:'',streamUrl:'',rating:x.rating || '',desc:x.plot || ''}));
@@ -1059,11 +1147,9 @@
       try {
         const c = JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
         if (!c) return false;
-        const ensureAll = (categories, label) =>
-          categories.some(category => category.id === 'all') ? categories : [{id:'all',name:label},...categories];
-        liveCategories=ensureAll(c.liveCategories || [],'جميع القنوات'); liveChannels=c.liveChannels || [];
-        movieCategories=ensureAll(c.movieCategories || [],'جميع الأفلام'); movies=c.movies || [];
-        seriesCategories=ensureAll(c.seriesCategories || [],'جميع المسلسلات'); series=c.series || [];
+        liveCategories=orderCategories(c.liveCategories || [],'جميع القنوات'); liveChannels=c.liveChannels || [];
+        movieCategories=orderCategories(c.movieCategories || [],'جميع الأفلام'); movies=c.movies || [];
+        seriesCategories=orderCategories(c.seriesCategories || [],'جميع المسلسلات'); series=c.series || [];
         const hasContent=liveChannels.length + movies.length + series.length > 0;
         const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
         return hasContent;
@@ -1315,19 +1401,19 @@
         titleEl.textContent = 'مباشر';
         searchInput.placeholder = 'البحث في القنوات...';
         catSearchInput.placeholder = 'البحث في فئات القنوات...';
-        currentActiveCategory = liveCategories[0] ? liveCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = liveChannels[0] || null;
       } else if (mode === 'movies') {
         titleEl.textContent = 'الأفلام (VOD)';
         searchInput.placeholder = 'البحث في الأفلام...';
         catSearchInput.placeholder = 'البحث في تصنيفات الأفلام...';
-        currentActiveCategory = movieCategories[0] ? movieCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = movies[0] || null;
       } else if (mode === 'series') {
         titleEl.textContent = 'المسلسلات (Series)';
         searchInput.placeholder = 'البحث في المسلسلات...';
         catSearchInput.placeholder = 'البحث في تصنيفات المسلسلات...';
-        currentActiveCategory = seriesCategories[0] ? seriesCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = series[0] || null;
       }
 
@@ -1535,7 +1621,6 @@
       if (!item.streamUrl) { showToast('رابط التشغيل غير متوفر من الخادم'); return; }
       videoPlaybackController.loadItem(item);
       if (currentAppMode === 'live') loadLiveEpg(item);
-      showToast('تم الاختيار: ' + item.name);
     }
 
     function classifyAudioSource(name, categoryName, categoryId) {
@@ -1664,7 +1749,6 @@
       // 5. Explicit Back Button in Top Bar (Returns to Home!)
       document.getElementById('live-btn-back').addEventListener('click', () => {
         switchView('view-home');
-        showToast('العودة إلى الشاشة الرئيسية');
       });
 
       // 6. Sidebar Mode Navigation (Unified 4-column layout)
