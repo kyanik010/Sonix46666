@@ -832,8 +832,10 @@
       cursor: pointer;
     }
     /* Fullscreen is portaled directly under body so ancestor overflow,
-       transforms and stacking contexts cannot trap the video inside the player column. */
-    body.sonix-video-fullscreen > *:not(.video-viewport) {
+       transforms and stacking contexts cannot trap the video inside the player column.
+       Exclude the external-audio dialog from the hidden app tree instead of hiding
+       it first and relying on a later visibility override. */
+    body.sonix-video-fullscreen > *:not(.video-viewport):not(#modal-ext-audio) {
       visibility: hidden !important;
       pointer-events: none !important;
     }
@@ -841,14 +843,14 @@
       visibility: visible !important;
       pointer-events: auto !important;
     }
-    /* The external-audio dialog must remain available above the fullscreen video. */
-    body.sonix-video-fullscreen > #modal-ext-audio {
+    /* Keep the body-level dialog above the native-video viewport and interactive. */
+    body.sonix-video-fullscreen > #modal-ext-audio.active {
+      position: fixed !important;
+      inset: 0 !important;
+      display: flex !important;
       visibility: visible !important;
       pointer-events: auto !important;
       z-index: 100001 !important;
-    }
-    body.sonix-video-fullscreen > #modal-ext-audio.active {
-      display: flex !important;
     }
 
     .video-viewport.is-fullscreen {
