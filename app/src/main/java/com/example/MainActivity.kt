@@ -462,6 +462,13 @@ class MainActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun hasTextTracks(): Boolean {
+            return try {
+                nativePlayer?.currentTracks?.groups?.any { it.type == C.TRACK_TYPE_TEXT } == true
+            } catch (_: Exception) { false }
+        }
+
+        @android.webkit.JavascriptInterface
         fun clearSubtitle() {
             runOnUiThread {
                 activeSubtitleFile = null
