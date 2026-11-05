@@ -99,6 +99,7 @@
     let movieCategories = [], movies = [];
     let seriesCategories = [], series = [];
     let activeCredentials = null, accountInfo = null, isOfflineCache = false;
+    let lastContentRefreshError = null;
     const FAVORITES_STORAGE_KEY = 'sonix_favorites_v2';
     function readSavedFavorites() {
       try {
@@ -1239,7 +1240,7 @@
     }
     function isNetworkFailure(error) {
       const message = String(error && error.message ? error.message : error || '');
-      return /تعذر العثور على خادم|انتهت مهلة الاتصال|تعذر الاتصال بخادم|فشل اتصال الخادم|unable to resolve|failed to connect|connection refused|timed out|network|HTTP 5\d\d/i.test(message);
+      return /تعذر العثور على خادم|انتهت مهلة الاتصال|تعذر الاتصال بخادم|فشل اتصال الخادم|قوائم محتوى فارغة|unable to resolve|failed to connect|connection refused|timed out|network|HTTP 5\d\d/i.test(message);
     }
     function nativeArray(action) {
       const value = parseNative(window.XtreamBridge.load(action));
@@ -1271,6 +1272,9 @@
       const rawLive = nativeArray('get_live_streams');
       const rawMovies = nativeArray('get_vod_streams');
       const rawSeries = nativeArray('get_series');
+      if (rawLive.length + rawMovies.length + rawSeries.length === 0) {
+        throw new Error('أعاد الخادم قوائم محتوى فارغة؛ لن نستبدل البيانات السابقة');
+      }
       liveCategories = orderCategories([{id:'all',name:'جميع القنوات'}, ...lc, {id:'favorites',name:'المفضلة'}], 'جميع القنوات');
       liveChannels = rawLive.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'قناة',
         category:x.category_id == null ? '' : 'live-' + x.category_id,categoryName:categoryName(lc,'live-',x.category_id),
@@ -1436,25 +1440,46 @@
         document.getElementById('series-episodes-modal').classList.add('active');
       } catch(error) { showToast(error.message || 'تعذر تحميل الحلقات'); }
     }
-    function refreshXtreamContent() {
+    function refreshXtreamContent(options = {}) {
+      const silent = Boolean(options && options.silent);
       try {
         if(!activeCredentials) throw new Error('سجّل الدخول أولاً');
         const session=parseNative(window.XtreamBridge.restoreSession());
         isOfflineCache=false;
         updateAccount(session.user_info);
         loadXtreamContent();
+        lastContentRefreshError = null;
         const status=document.getElementById('profile-server-status');
         if(status) status.textContent='تم التحقق من الاشتراك';
-        showToast('تم تحديث المحتوى من خادم الاشتراك');
+        if (!silent) showToast('تم تحديث المحتوى من خادم الاشتراك');
+        return true;
       } catch(error) {
-        const hasCache=!!(activeCredentials && isNetworkFailure(error) && restoreXtreamCache());
+        lastContentRefreshError = error;
+        const retryable = isNetworkFailure(error);
+        const hasCache=!!(activeCredentials && retryable && restoreXtreamCache());
         isOfflineCache=hasCache;
         const note=document.getElementById('cache-status'); if(note) note.style.display=hasCache?'block':'none';
         const status=document.getElementById('profile-server-status');
-        if(status) status.textContent=hasCache?'تعذر التحديث — بيانات سابقة':(isNetworkFailure(error)?'تعذر الاتصال بالخادم':'تعذر التحقق من الاشتراك');
+        if(status) status.textContent=hasCache?'تعذر التحديث — بيانات سابقة':(retryable?'تعذر الاتصال بالخادم':'تعذر تحديث المحتوى');
         if (hasCache) { renderCategories(); renderItems(); renderAudioSourcePicker(); }
-        showToast('فشل التحديث: ' + (error.message || 'تعذر الاتصال'));
+        if (!silent) showToast('فشل التحديث: ' + (error.message || 'تعذر الاتصال'));
+        return false;
       }
+    }
+
+    // Revalidate the saved account and reload all catalogues after every fresh app start.
+    // Retry transient network failures without clearing a previously restored local catalogue.
+    function restoreProviderContentOnStartup(attempt = 0) {
+      if (!activeCredentials) return;
+      if (refreshXtreamContent({silent:true})) return;
+
+      const error = lastContentRefreshError;
+      if (attempt < 2 && isNetworkFailure(error)) {
+        const retryDelays = [3000, 8000];
+        setTimeout(() => restoreProviderContentOnStartup(attempt + 1), retryDelays[attempt]);
+        return;
+      }
+      if (error) showToast('تعذر استعادة المحتوى: ' + (error.message || 'تحقق من اتصال الإنترنت'));
     }
 
     /**
@@ -1987,6 +2012,9 @@
         renderCategories();
         renderItems();
         renderAudioSourcePicker();
+        const startupStatus=document.getElementById('profile-server-status');
+        if(startupStatus) startupStatus.textContent='جارٍ استعادة القنوات والأفلام والمسلسلات...';
+        setTimeout(() => restoreProviderContentOnStartup(), 400);
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
