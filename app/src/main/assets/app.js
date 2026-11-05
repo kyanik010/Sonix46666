@@ -1753,23 +1753,13 @@
       if (currentAppMode === 'live' && !item.streamUrl) {
         item.streamDescriptor = { type: 'live', id: String(item.id), ext: item.containerExtension || 'ts' }; item.streamUrl = 'native://stream';
       }
-      if (currentAppMode === 'movies' && window.XtreamBridge) {
-        if (!isOfflineCache) {
-          try {
-            const details=parseNative(window.XtreamBridge.vodInfo(item.id));
-            const info=details.info || {};
-            const movie=details.movie_data || {};
-            item.desc=info.plot || item.desc || '';
-            item.rating=info.rating || item.rating || '';
-            item.logo=info.movie_image || item.logo || '';
-            item.containerExtension=movie.container_extension || item.containerExtension || 'mp4';
-            const selectedRow = Array.from(document.querySelectorAll('.channel-row'))
-              .find(row => row.dataset.itemId === String(item.id));
-            if (selectedRow) setProviderImage(selectedRow.querySelector('.channel-logo-box'), item.logo, item.name, item.logoText || '');
-          } catch (error) { console.warn('VOD details unavailable',error); }
-        }
+      if (currentAppMode === 'movies') {
+        // The VOD catalogue already contains the stream extension and basic
+        // metadata. Do not make a synchronous get_vod_info HTTP request here:
+        // it blocks selection and delays playback before ExoPlayer even starts.
         if (!item.streamUrl) {
-          item.streamDescriptor = { type: 'movie', id: String(item.id), ext: item.containerExtension || 'mp4' }; item.streamUrl = 'native://stream';
+          item.streamDescriptor = { type: 'movie', id: String(item.id), ext: item.containerExtension || 'mp4' };
+          item.streamUrl = 'native://stream';
         }
       }
       if (!item.streamUrl) { showToast('رابط التشغيل غير متوفر من الخادم'); return; }
