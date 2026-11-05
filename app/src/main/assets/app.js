@@ -1902,7 +1902,11 @@
         document.getElementById('login-username').value,
         document.getElementById('login-password').value, false));
       ['login-server','login-username','login-password'].forEach(id => document.getElementById(id).addEventListener('keydown',e => {
-        if(e.key === 'Enter') document.getElementById('login-submit').click();
+        if(e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          document.getElementById('login-submit').click();
+        }
       }));
 
       // Load persisted preferences before the playback controller is created.
