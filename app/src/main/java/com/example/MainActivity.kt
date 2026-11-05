@@ -28,6 +28,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import android.view.ViewGroup
 import android.view.LayoutInflater
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -66,6 +67,8 @@ class MainActivity : ComponentActivity() {
     private var activeSubtitleFile: File? = null
     private val subtitleTypefaceCache = mutableMapOf<String, Typeface>()
     private val subtitleIoExecutor = Executors.newFixedThreadPool(3)
+    private val subtitleGeneration = AtomicLong(0)
+    private var subtitlePickerGeneration = 0L
     private val subtitlePickerRequestCode = 7412
     private var resumeNativePlayerAfterPause = false
     @Volatile private var nativePlayerActive = false
@@ -419,6 +422,7 @@ class MainActivity : ComponentActivity() {
 
         @android.webkit.JavascriptInterface
         fun applySubtitleAsync(rawUrl: String, label: String, requestId: String) {
+            val requestGeneration = subtitleGeneration.incrementAndGet()
             subtitleIoExecutor.execute {
                 var downloaded: File? = null
                 val payload = try {
@@ -446,8 +450,20 @@ class MainActivity : ComponentActivity() {
                     JSONObject().put("success", false).put("error", error.message ?: "تعذر تنزيل الترجمة").toString()
                 }
                 runOnUiThread {
-                    if (downloaded != null) attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false)
-                    deliverSubtitleResponse(requestId, payload)
+                    if (requestGeneration != subtitleGeneration.get()) {
+                        deliverSubtitleResponse(requestId, JSONObject().put("success", false)
+                            .put("error", "تغير المحتوى قبل اكتمال تحميل الترجمة").toString())
+                    } else if (downloaded != null) {
+                        try {
+                            attachSubtitleFile(downloaded!!, label.ifBlank { "Online subtitle" }, false)
+                            deliverSubtitleResponse(requestId, payload)
+                        } catch (error: Exception) {
+                            deliverSubtitleResponse(requestId, JSONObject().put("success", false)
+                                .put("error", error.message ?: "تعذر تطبيق الترجمة").toString())
+                        }
+                    } else {
+                        deliverSubtitleResponse(requestId, payload)
+                    }
                 }
             }
         }
@@ -456,6 +472,7 @@ class MainActivity : ComponentActivity() {
         fun pickSubtitle() {
             runOnUiThread {
                 try {
+                    subtitlePickerGeneration = subtitleGeneration.incrementAndGet()
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "*/*"
@@ -481,6 +498,7 @@ class MainActivity : ComponentActivity() {
         @android.webkit.JavascriptInterface
         fun clearSubtitle() {
             runOnUiThread {
+                subtitleGeneration.incrementAndGet()
                 activeSubtitleFile = null
                 nativePlayer?.let { player ->
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -857,6 +875,10 @@ class MainActivity : ComponentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != subtitlePickerRequestCode || resultCode != RESULT_OK) return
+        if (subtitlePickerGeneration != subtitleGeneration.get()) {
+            notifyLocalSubtitleResult(false, "", "تغير المحتوى قبل اختيار ملف الترجمة")
+            return
+        }
         val uri = data?.data ?: return
         try {
             val name = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -878,6 +900,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopNativePlayer() {
+        subtitleGeneration.incrementAndGet()
         activeMediaUri = null
         activeSubtitleFile = null
         nativePlayerActive = false
