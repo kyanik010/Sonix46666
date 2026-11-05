@@ -1028,6 +1028,14 @@
     function makeCategories(rows, prefix) {
       return rows.map(row => ({id:prefix + String(row.category_id), providerId:String(row.category_id), name:row.category_name || 'تصنيف'}));
     }
+    // Keep the two built-in entries first in every content section, including restored offline caches.
+    function orderCategories(categories, allLabel) {
+      const source = Array.isArray(categories) ? categories : [];
+      const all = source.find(category => category && category.id === 'all') || {id:'all',name:allLabel};
+      const favorites = source.find(category => category && category.id === 'favorites') || {id:'favorites',name:'المفضلة'};
+      return [favorites, all, ...source.filter(category =>
+        category && category.id !== 'favorites' && category.id !== 'all')];
+    }
     function makeStreamUrl(type, id, item) {
       if (!activeCredentials || !window.XtreamBridge) return '';
       const ext = (item.container_extension || (type === 'live' ? 'ts' : 'mp4')).replace(/^\./,'');
@@ -1042,17 +1050,17 @@
       const rawLive = nativeArray('get_live_streams');
       const rawMovies = nativeArray('get_vod_streams');
       const rawSeries = nativeArray('get_series');
-      liveCategories = [{id:'all',name:'جميع القنوات'}].concat(lc,[{id:'favorites',name:'المفضلة'}]);
+      liveCategories = orderCategories([{id:'all',name:'جميع القنوات'}, ...lc, {id:'favorites',name:'المفضلة'}], 'جميع القنوات');
       liveChannels = rawLive.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'قناة',
         category:x.category_id == null ? '' : 'live-' + x.category_id,categoryName:categoryName(lc,'live-',x.category_id),
         logo:x.stream_icon || '',logoText:'',streamUrl:'',
         epgChannelId:x.epg_channel_id || '',containerExtension:x.container_extension || 'ts'}));
-      movieCategories = [{id:'all',name:'جميع الأفلام'}].concat(mc,[{id:'favorites',name:'المفضلة'}]);
+      movieCategories = orderCategories([{id:'all',name:'جميع الأفلام'}, ...mc, {id:'favorites',name:'المفضلة'}], 'جميع الأفلام');
       movies = rawMovies.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'فيلم',
         category:x.category_id == null ? '' : 'movie-' + x.category_id,categoryName:categoryName(mc,'movie-',x.category_id),
         logo:x.stream_icon || '',logoText:'',streamUrl:'',
         rating:x.rating || '',desc:x.plot || '',containerExtension:x.container_extension || 'mp4'}));
-      seriesCategories = [{id:'all',name:'جميع المسلسلات'}].concat(sc,[{id:'favorites',name:'المفضلة'}]);
+      seriesCategories = orderCategories([{id:'all',name:'جميع المسلسلات'}, ...sc, {id:'favorites',name:'المفضلة'}], 'جميع المسلسلات');
       series = rawSeries.map((x,i) => ({id:String(x.series_id),seriesId:String(x.series_id),number:i+1,name:x.name || 'مسلسل',
         category:x.category_id == null ? '' : 'series-' + x.category_id,categoryName:categoryName(sc,'series-',x.category_id),
         logo:x.cover || '',logoText:'',streamUrl:'',rating:x.rating || '',desc:x.plot || ''}));
@@ -1073,11 +1081,9 @@
       try {
         const c = JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
         if (!c) return false;
-        const ensureAll = (categories, label) =>
-          categories.some(category => category.id === 'all') ? categories : [{id:'all',name:label},...categories];
-        liveCategories=ensureAll(c.liveCategories || [],'جميع القنوات'); liveChannels=c.liveChannels || [];
-        movieCategories=ensureAll(c.movieCategories || [],'جميع الأفلام'); movies=c.movies || [];
-        seriesCategories=ensureAll(c.seriesCategories || [],'جميع المسلسلات'); series=c.series || [];
+        liveCategories=orderCategories(c.liveCategories || [],'جميع القنوات'); liveChannels=c.liveChannels || [];
+        movieCategories=orderCategories(c.movieCategories || [],'جميع الأفلام'); movies=c.movies || [];
+        seriesCategories=orderCategories(c.seriesCategories || [],'جميع المسلسلات'); series=c.series || [];
         const hasContent=liveChannels.length + movies.length + series.length > 0;
         const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
         return hasContent;
@@ -1326,19 +1332,19 @@
         titleEl.textContent = 'مباشر';
         searchInput.placeholder = 'البحث في القنوات...';
         catSearchInput.placeholder = 'البحث في فئات القنوات...';
-        currentActiveCategory = liveCategories[0] ? liveCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = liveChannels[0] || null;
       } else if (mode === 'movies') {
         titleEl.textContent = 'الأفلام (VOD)';
         searchInput.placeholder = 'البحث في الأفلام...';
         catSearchInput.placeholder = 'البحث في تصنيفات الأفلام...';
-        currentActiveCategory = movieCategories[0] ? movieCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = movies[0] || null;
       } else if (mode === 'series') {
         titleEl.textContent = 'المسلسلات (Series)';
         searchInput.placeholder = 'البحث في المسلسلات...';
         catSearchInput.placeholder = 'البحث في تصنيفات المسلسلات...';
-        currentActiveCategory = seriesCategories[0] ? seriesCategories[0].id : '';
+        currentActiveCategory = 'all';
         currentSelectedItem = series[0] || null;
       }
 
