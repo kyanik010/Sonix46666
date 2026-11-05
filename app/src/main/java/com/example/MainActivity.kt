@@ -63,6 +63,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.ViewCompat
 
 @OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
@@ -129,6 +130,7 @@ class MainActivity : ComponentActivity() {
     private var nativeVideoVolumeBeforeExternalAudio = 1f
     private var nativeVideoMuted = false
     private lateinit var xtreamBridge: XtreamBridge
+    @Volatile private var webTextInputFocused = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,13 +195,11 @@ class MainActivity : ComponentActivity() {
             rootContainer = root
             setContentView(root)
 
-            // Back button handling: routes back to Home or closes modals inside web app
+            // Let the IME consume the first Back action while it is visible.
+            // Only route Back into the web app after text editing has ended.
             onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    webView?.evaluateJavascript(
-                        "(function() { if (window.handleAndroidBack) { window.handleAndroidBack(); } else if (window.remoteNavigator) { window.remoteNavigator.handleBackAction(); } })()",
-                        null
-                    )
+                    dispatchNativeBack()
                 }
             })
 
@@ -1355,6 +1355,11 @@ class MainActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun setTextInputFocused(focused: Boolean) {
+            activity.webTextInputFocused = focused
+        }
+
+        @android.webkit.JavascriptInterface
         fun closeApp() {
             activity.runOnUiThread {
                 activity.finish()
@@ -1362,8 +1367,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isSoftwareKeyboardVisible(): Boolean {
+        val wv = webView ?: return false
+        return ViewCompat.getRootWindowInsets(wv)
+            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+    }
+
+    private fun dispatchNativeBack() {
+        val wv = webView ?: return
+        if (isSoftwareKeyboardVisible()) {
+            WindowInsetsControllerCompat(window, wv).hide(WindowInsetsCompat.Type.ime())
+            return
+        }
+        wv.evaluateJavascript(
+            "(function() { if (window.handleAndroidBack) { window.handleAndroidBack(); } else if (window.remoteNavigator) { window.remoteNavigator.handleBackAction(); } })()",
+            null
+        )
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val wv = webView ?: return super.onKeyDown(keyCode, event)
+        if (webTextInputFocused && keyCode in setOf(
+                KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER
+            )) {
+            // Preserve native WebView/IME cursor movement and text-field activation.
+            return super.onKeyDown(keyCode, event)
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 dispatchWebKey("ArrowUp")
@@ -1386,10 +1420,7 @@ class MainActivity : ComponentActivity() {
                 return true
             }
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                wv.evaluateJavascript(
-                    "(function() { if (window.handleAndroidBack) { window.handleAndroidBack(); } else if (window.remoteNavigator) { window.remoteNavigator.handleBackAction(); } })()",
-                    null
-                )
+                dispatchNativeBack()
                 return true
             }
         }
@@ -1418,10 +1449,6 @@ class MainActivity : ComponentActivity() {
         if (resumeNativePlayerAfterPause) nativePlayer?.play()
         if (resumeNativePlayerAfterPause && externalAudioActive) secondaryAudioPlayer?.play()
         resumeNativePlayerAfterPause = false
-        webView?.evaluateJavascript(
-            "(function() { if (typeof window.ensureHomeScreen === 'function') { window.ensureHomeScreen(); } })()",
-            null
-        )
     }
 
     override fun onPause() {
