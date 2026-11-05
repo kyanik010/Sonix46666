@@ -760,6 +760,13 @@
             return;
           }
 
+          // Text fields own editing keys. In particular, Backspace/Delete must
+          // edit the focused login credential instead of being interpreted as app Back.
+          const editingElement = document.activeElement;
+          const isEditingText = editingElement &&
+            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
+          if (isEditingText && !['Escape', 'Back'].includes(e.key)) return;
+
           if (videoPlaybackController && videoPlaybackController.currentItem &&
               (e.key === 'ArrowUp' || e.key === 'Up' ||
                e.key === 'ArrowDown' || e.key === 'Down' ||
@@ -1976,30 +1983,19 @@
       });
 
       try {
+        // Credentials are kept in the encrypted native vault and the last
+        // successfully loaded catalogue is already persisted in WebView storage.
+        // Restore the cached screen first; never block startup on provider HTTP calls.
         const saved=parseNative(window.XtreamBridge.savedCredentials());
         document.getElementById('login-server').value=saved.server || '';
         document.getElementById('login-username').value=saved.username || '';
         activeCredentials={server:saved.server,username:saved.username};
-        try {
-          const restored=parseNative(window.XtreamBridge.restoreSession());
-          isOfflineCache=false;
-          updateAccount(restored.user_info);
-          loadXtreamContent();
-          document.getElementById('sonix-login-screen').classList.add('hidden');
-        } catch (restoreError) {
-          // A successful previous login is persistent: never ask for credentials again
-          // merely because the provider is temporarily unreachable or rejects a restore.
-          const hasCache=restoreXtreamCache();
-          isOfflineCache=hasCache;
-          updateAccount({username:saved.username});
-          document.getElementById('sonix-login-screen').classList.add('hidden');
-          if(hasCache) {
-            renderCategories();renderItems();renderAudioSourcePicker();
-            showToast('تعذر الاتصال؛ يتم عرض آخر بيانات مخزنة');
-          } else {
-            showToast(restoreError.message || 'تعذر الاتصال بالاشتراك المحفوظ');
-          }
-        }
+        isOfflineCache=restoreXtreamCache();
+        updateAccount({username:saved.username});
+        document.getElementById('sonix-login-screen').classList.add('hidden');
+        renderCategories();
+        renderItems();
+        renderAudioSourcePicker();
       } catch (_) {
         activeCredentials=null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
