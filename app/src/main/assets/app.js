@@ -992,28 +992,49 @@
       closeAllModals();
       if (modalId === 'modal-settings') syncSonixSettingsControls();
       const modal = document.getElementById(modalId);
-      if (modal) {
-        // Fullscreen mode portals the video viewport to <body> and hides the
-        // remaining app tree. Portal this dialog too, otherwise it stays inside
-        // a hidden ancestor and cannot appear until fullscreen is exited.
-        if (modalId === 'modal-ext-audio' && videoPlaybackController && videoPlaybackController.isFullscreen &&
-            modal.parentElement !== document.body) {
-          modal._sonixOriginalParent = modal.parentElement;
-          modal._sonixOriginalNextSibling = modal.nextSibling;
-          document.body.appendChild(modal);
-          modal.dataset.sonixFullscreenPortal = 'true';
-        }
-        modal.classList.add('active');
-        const firstFocusable = modal.querySelector('.focusable');
-        if (firstFocusable && remoteNavigator) {
-          remoteNavigator.focusElement(firstFocusable);
-        }
+      if (!modal) return;
+
+      const isFullscreenAudioDialog = modalId === 'modal-ext-audio' &&
+        !!(videoPlaybackController && videoPlaybackController.isFullscreen);
+
+      // The fullscreen video is portaled to <body> while #app-container is
+      // deliberately hidden. Move the dialog out of that hidden subtree before
+      // making it active, then let the next frame calculate focusable geometry.
+      if (isFullscreenAudioDialog && modal.parentElement !== document.body) {
+        modal._sonixOriginalParent = modal.parentElement;
+        modal._sonixOriginalNextSibling = modal.nextSibling;
+        document.body.appendChild(modal);
+        modal.dataset.sonixFullscreenPortal = 'true';
+      }
+
+      modal.setAttribute('aria-hidden', 'false');
+      modal.classList.add('active');
+
+      const focusDialog = () => {
+        if (!modal.classList.contains('active')) return;
+        const firstFocusable = modal.querySelector('.focusable:not([disabled])');
+        if (firstFocusable && remoteNavigator) remoteNavigator.focusElement(firstFocusable);
+      };
+      if (isFullscreenAudioDialog) {
+        // Force WebView to commit the body-level overlay before remote focus is
+        // calculated; otherwise some TV WebViews report zero-sized focus targets.
+        requestAnimationFrame(() => {
+          modal.getBoundingClientRect();
+          focusDialog();
+        });
+      } else {
+        focusDialog();
       }
     }
 
     function closeAllModals() {
+      let closedFullscreenAudio = false;
       document.querySelectorAll('.modal-backdrop').forEach(el => {
+        if (el.id === 'modal-ext-audio' && el.dataset.sonixFullscreenPortal === 'true') {
+          closedFullscreenAudio = true;
+        }
         el.classList.remove('active');
+        el.setAttribute('aria-hidden', 'true');
         if (el.dataset.sonixFullscreenPortal === 'true' && el._sonixOriginalParent) {
           const parent = el._sonixOriginalParent;
           const next = el._sonixOriginalNextSibling;
@@ -1024,6 +1045,11 @@
           delete el.dataset.sonixFullscreenPortal;
         }
       });
+
+      if (closedFullscreenAudio && videoPlaybackController && videoPlaybackController.isFullscreen && remoteNavigator) {
+        const audioButton = document.getElementById('btn-open-ext-audio');
+        if (audioButton) remoteNavigator.focusElement(audioButton);
+      }
     }
 
     let toastTimer = null;
