@@ -145,10 +145,16 @@ class MainActivity : ComponentActivity() {
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setBackgroundColor(Color.TRANSPARENT)
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+                }
 
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
+                    databaseEnabled = true
                     mediaPlaybackRequiresUserGesture = false
                     // Secure defaults: restrict arbitrary local file access from web contents.
                     // Assets loaded via file:///android_asset/ work reliably with default settings.
@@ -167,6 +173,13 @@ class MainActivity : ComponentActivity() {
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         return false
+                    }
+
+                    override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                        android.util.Log.e("SONIXPlayback", "WebView render process gone; didCrash=" + detail?.didCrash())
+                        view?.destroy()
+                        recreate()
+                        return true
                     }
                 }
 
@@ -194,6 +207,7 @@ class MainActivity : ComponentActivity() {
             ))
             rootContainer = root
             setContentView(root)
+            wv.requestFocus()
 
             // Let the IME consume the first Back action while it is visible.
             // Only route Back into the web app after text editing has ended.
@@ -1385,61 +1399,138 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        val wv = webView ?: return super.onKeyDown(keyCode, event)
-        if (webTextInputFocused && keyCode in setOf(
-                KeyEvent.KEYCODE_DPAD_UP,
-                KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT,
-                KeyEvent.KEYCODE_DPAD_RIGHT,
-                KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER
-            )) {
-            // Preserve native WebView/IME cursor movement and text-field activation.
-            return super.onKeyDown(keyCode, event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val wv = webView ?: return super.dispatchKeyEvent(event)
+        val keyCode = event.keyCode
+        val action = event.action
+
+        // 1. When an editable text input is focused in the web view:
+        if (webTextInputFocused) {
+            // Allow vertical D-pad navigation to smoothly move between fields
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (action == KeyEvent.ACTION_DOWN) {
+                    dispatchWebKey("ArrowDown")
+                }
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (action == KeyEvent.ACTION_DOWN) {
+                    dispatchWebKey("ArrowUp")
+                }
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                return wv.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
+            }
+            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                if (action == KeyEvent.ACTION_UP) {
+                    dispatchNativeBack()
+                }
+                return true
+            }
+
+            // Route typing keys (alphanumeric, symbols, space, backspace, etc.) to webView
+            if (wv.dispatchKeyEvent(event)) {
+                return true
+            }
+
+            // CRITICAL TV FIX: Always consume numeric keys (0-9) and standard keyboard characters
+            // while in text editing mode so Android TV OS NEVER interprets them as TV tuner channel switches!
+            if (keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ||
+                keyCode in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 ||
+                keyCode in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z ||
+                keyCode == KeyEvent.KEYCODE_SPACE ||
+                keyCode == KeyEvent.KEYCODE_DEL ||
+                keyCode == KeyEvent.KEYCODE_PERIOD ||
+                keyCode == KeyEvent.KEYCODE_MINUS ||
+                keyCode == KeyEvent.KEYCODE_SLASH ||
+                keyCode == KeyEvent.KEYCODE_SEMICOLON ||
+                keyCode == KeyEvent.KEYCODE_AT) {
+                return true
+            }
         }
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                dispatchWebKey("ArrowUp")
-                return true
+
+        // 2. Standard Android TV Remote Control Navigation (outside text input):
+        if (action == KeyEvent.ACTION_DOWN) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    dispatchWebKey("ArrowUp")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    dispatchWebKey("ArrowDown")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    dispatchWebKey("ArrowLeft")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    dispatchWebKey("ArrowRight")
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    dispatchWebKey("Enter")
+                    return true
+                }
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                    dispatchNativeBack()
+                    return true
+                }
+                KeyEvent.KEYCODE_MENU -> {
+                    dispatchWebKey("Menu")
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    dispatchWebKey("MediaPlayPause")
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    dispatchWebKey("MediaPlay")
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    dispatchWebKey("MediaPause")
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                    dispatchWebKey("MediaFastForward")
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                    dispatchWebKey("MediaRewind")
+                    return true
+                }
             }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                dispatchWebKey("ArrowDown")
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                dispatchWebKey("ArrowLeft")
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                dispatchWebKey("ArrowRight")
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                dispatchWebKey("Enter")
-                return true
-            }
-            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                dispatchNativeBack()
+        } else if (action == KeyEvent.ACTION_UP) {
+            // Consume ACTION_UP for remote keys to prevent double-press or system defaults
+            if (keyCode in setOf(
+                    KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_DPAD_DOWN,
+                    KeyEvent.KEYCODE_DPAD_LEFT,
+                    KeyEvent.KEYCODE_DPAD_RIGHT,
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_BACK,
+                    KeyEvent.KEYCODE_ESCAPE,
+                    KeyEvent.KEYCODE_MENU,
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                    KeyEvent.KEYCODE_MEDIA_PLAY,
+                    KeyEvent.KEYCODE_MEDIA_PAUSE,
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+                    KeyEvent.KEYCODE_MEDIA_REWIND
+                )) {
                 return true
             }
         }
-        return super.onKeyDown(keyCode, event)
+
+        return super.dispatchKeyEvent(event)
     }
 
     private fun dispatchWebKey(keyName: String) {
-        val js = """
-            (function() {
-                var event = new KeyboardEvent('keydown', {
-                    key: '$keyName',
-                    code: '$keyName',
-                    bubbles: true,
-                    cancelable: true
-                });
-                window.dispatchEvent(event);
-            })();
-        """.trimIndent()
-        webView?.evaluateJavascript(js, null)
+        val wv = webView ?: return
+        val js = "if(window.handleRemoteKey){window.handleRemoteKey('$keyName');}else{var ev=new KeyboardEvent('keydown',{key:'$keyName',code:'$keyName',bubbles:true,cancelable:true});window.dispatchEvent(ev);}"
+        wv.evaluateJavascript(js, null)
     }
 
     override fun onResume() {

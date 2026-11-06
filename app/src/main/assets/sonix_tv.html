@@ -15,10 +15,21 @@
   <section id="sonix-login-screen" class="hidden" aria-label="تسجيل الدخول">
     <div class="sonix-login-card">
       <div class="sonix-brand" style="align-items:center"><div class="sonix-title-row"><span class="sonix-text">SONIX</span><span class="tv-text">TV</span></div><span class="stream-subtitle">XTREAM CODES</span></div>
-      <div style="text-align:center;color:var(--text-silver)">أدخل بيانات اشتراك IPTV للاتصال بالخادم</div>
-      <input id="login-server" class="focusable" type="url" autocomplete="url" placeholder="عنوان السيرفر https://server:port">
-      <input id="login-username" class="focusable" type="text" autocomplete="username" placeholder="اسم المستخدم">
-      <input id="login-password" class="focusable" type="password" autocomplete="current-password" placeholder="كلمة المرور">
+      <div style="text-align:center;color:var(--text-silver);font-size:0.85rem;">أدخل بيانات اشتراك IPTV للاتصال بالخادم</div>
+      <input id="login-server" class="focusable" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="عنوان السيرفر http://server:port">
+      <input id="login-username" class="focusable" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="اسم المستخدم">
+      <input id="login-password" class="focusable" type="password" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="كلمة المرور">
+      
+      <!-- TV Remote Quick Input Bar -->
+      <div class="tv-quick-bar" aria-label="مساعد الريموت للإدخال السريع">
+        <button type="button" class="tv-quick-btn focusable" data-insert="http://">http://</button>
+        <button type="button" class="tv-quick-btn focusable" data-insert="https://">https://</button>
+        <button type="button" class="tv-quick-btn focusable" data-insert=":8080">:8080</button>
+        <button type="button" class="tv-quick-btn focusable" data-insert=":80">:80</button>
+        <button type="button" class="tv-quick-btn focusable" data-insert=".com">.com</button>
+        <button type="button" class="tv-quick-btn focusable btn-clear" data-action="clear">مسح</button>
+      </div>
+
       <button id="login-submit" class="focusable" type="button">تسجيل الدخول</button>
       <div id="sonix-login-message" role="status"></div>
     </div>

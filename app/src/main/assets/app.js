@@ -755,85 +755,202 @@
 
       bindKeyEvents() {
         window.addEventListener('keydown', (e) => {
-          // Native text editors and the TV IME own every key while an editable
-          // control has focus. Back/Escape must never become app navigation here.
-          const editingElement = document.activeElement;
-          const isEditingText = editingElement &&
-            (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
-          if (isEditingText) {
-            if (e.key === 'Escape' || e.key === 'Back') e.preventDefault();
+          this.handleKeyEvent(e);
+        });
+
+        // Direct fast invocation from Android MainActivity via window.handleRemoteKey
+        window.handleRemoteKey = (keyName) => {
+          this.onRemoteKey(keyName);
+        };
+      }
+
+      onRemoteKey(keyName) {
+        const editingElement = document.activeElement;
+        const isEditingText = editingElement &&
+          (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
+
+        if (isEditingText) {
+          if (keyName === 'ArrowDown') {
+            this.navigateSpatial('down');
             return;
           }
-
-          const activeModal = document.querySelector('.modal-backdrop.active');
-          if (activeModal) {
-            this.handleModalKey(e, activeModal);
+          if (keyName === 'ArrowUp') {
+            this.navigateSpatial('up');
             return;
           }
-
-          if (videoPlaybackController && videoPlaybackController.currentItem &&
-              (e.key === 'ArrowUp' || e.key === 'Up' ||
-               e.key === 'ArrowDown' || e.key === 'Down' ||
-               e.key === 'ArrowLeft' || e.key === 'Left' ||
-               e.key === 'ArrowRight' || e.key === 'Right')) {
-            const controls = document.getElementById('player-playback-controls');
-            if (videoPlaybackController.isFullscreen && controls && !controls.classList.contains('visible')) {
-              e.preventDefault();
-              videoPlaybackController.showPlaybackControls();
-              const seekBar = document.getElementById('player-seek-bar');
-              const firstControl = seekBar && !seekBar.disabled &&
-                videoPlaybackController.viewport.classList.contains('has-vod-timeline')
-                ? seekBar
-                : controls.querySelector('.playback-control-btn:not([disabled])');
-              if (firstControl) this.focusElement(firstControl);
+          if (keyName === 'Back' || keyName === 'Escape') {
+            editingElement.blur();
+            return;
+          }
+          if (keyName === 'Enter') {
+            if (editingElement.id === 'login-password' || editingElement.id === 'login-username' || editingElement.id === 'login-server') {
+              const submitBtn = document.getElementById('login-submit');
+              if (submitBtn) submitBtn.click();
               return;
             }
-            if (videoPlaybackController.isFullscreen && controls && controls.classList.contains('visible')) {
-              videoPlaybackController.showPlaybackControls();
+          }
+          return;
+        }
+
+        switch (keyName) {
+          case 'ArrowUp':
+          case 'Up':
+            this.handleDirectionAction('up');
+            break;
+          case 'ArrowDown':
+          case 'Down':
+            this.handleDirectionAction('down');
+            break;
+          case 'ArrowLeft':
+          case 'Left':
+            this.handleDirectionAction('left');
+            break;
+          case 'ArrowRight':
+          case 'Right':
+            this.handleDirectionAction('right');
+            break;
+          case 'Enter':
+            this.handleEnterAction();
+            break;
+          case 'Back':
+          case 'Escape':
+            this.handleBackAction();
+            break;
+          case 'Menu':
+            this.handleMenuAction();
+            break;
+          case 'MediaPlayPause':
+            if (videoPlaybackController) videoPlaybackController.togglePlayback();
+            break;
+          case 'MediaPlay':
+            if (videoPlaybackController) videoPlaybackController.resume();
+            break;
+          case 'MediaPause':
+            if (videoPlaybackController) videoPlaybackController.pause();
+            break;
+          case 'MediaFastForward':
+            if (videoPlaybackController) videoPlaybackController.seekBy(10000);
+            break;
+          case 'MediaRewind':
+            if (videoPlaybackController) videoPlaybackController.seekBy(-10000);
+            break;
+        }
+      }
+
+      handleKeyEvent(e) {
+        const editingElement = document.activeElement;
+        const isEditingText = editingElement &&
+          (editingElement.matches('input, textarea, select') || editingElement.isContentEditable);
+        if (isEditingText) {
+          if (e.key === 'Escape' || e.key === 'Back') {
+            e.preventDefault();
+            editingElement.blur();
+            return;
+          }
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            this.navigateSpatial('down');
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            this.navigateSpatial('up');
+            return;
+          }
+          if (e.key === 'Enter') {
+            if (editingElement.id === 'login-password' || editingElement.id === 'login-username' || editingElement.id === 'login-server') {
+              e.preventDefault();
+              const submitBtn = document.getElementById('login-submit');
+              if (submitBtn) submitBtn.click();
+              return;
             }
           }
-          switch (e.key) {
-            case 'ArrowUp':
-            case 'Up':
-              e.preventDefault();
-              this.navigateSpatial('up');
-              break;
-            case 'ArrowDown':
-            case 'Down':
-              e.preventDefault();
-              this.navigateSpatial('down');
-              break;
-            case 'ArrowLeft':
-            case 'Left':
-              e.preventDefault();
-              this.navigateSpatial('left');
-              break;
-            case 'ArrowRight':
-            case 'Right':
-              e.preventDefault();
-              this.navigateSpatial('right');
-              break;
-            case 'Enter':
-              if (this.currentFocusedElement &&
-                  this.currentFocusedElement.matches('.channel-row.selected') &&
-                  videoPlaybackController && videoPlaybackController.currentItem &&
-                  !videoPlaybackController.isFullscreen &&
-                  window.NativePlayback && window.NativePlayback.isActive()) {
-                // A second OK/Enter on the selected playing item enters fullscreen
-                // on TV remotes, where double-click/touch gestures are unavailable.
-                videoPlaybackController.toggleFullscreen();
-              } else if (this.currentFocusedElement) {
-                this.currentFocusedElement.click();
-              }
-              break;
-            case 'Escape':
-            case 'Back':
-            case 'Backspace':
-              e.preventDefault();
-              this.handleBackAction();
-              break;
+          return;
+        }
+
+        const activeModal = document.querySelector('.modal-backdrop.active');
+        if (activeModal) {
+          this.handleModalKey(e, activeModal);
+          return;
+        }
+
+        switch (e.key) {
+          case 'ArrowUp':
+          case 'Up':
+            e.preventDefault();
+            this.handleDirectionAction('up');
+            break;
+          case 'ArrowDown':
+          case 'Down':
+            e.preventDefault();
+            this.handleDirectionAction('down');
+            break;
+          case 'ArrowLeft':
+          case 'Left':
+            e.preventDefault();
+            this.handleDirectionAction('left');
+            break;
+          case 'ArrowRight':
+          case 'Right':
+            e.preventDefault();
+            this.handleDirectionAction('right');
+            break;
+          case 'Enter':
+            e.preventDefault();
+            this.handleEnterAction();
+            break;
+          case 'Escape':
+          case 'Back':
+          case 'Backspace':
+            e.preventDefault();
+            this.handleBackAction();
+            break;
+        }
+      }
+
+      handleDirectionAction(direction) {
+        if (videoPlaybackController && videoPlaybackController.currentItem && videoPlaybackController.isFullscreen) {
+          const controls = document.getElementById('player-playback-controls');
+          if (controls && !controls.classList.contains('visible')) {
+            videoPlaybackController.showPlaybackControls();
+            const seekBar = document.getElementById('player-seek-bar');
+            const firstControl = seekBar && !seekBar.disabled &&
+              videoPlaybackController.viewport.classList.contains('has-vod-timeline')
+              ? seekBar
+              : controls.querySelector('.playback-control-btn:not([disabled])');
+            if (firstControl) this.focusElement(firstControl);
+            return;
           }
-        });
+          if (controls && controls.classList.contains('visible')) {
+            videoPlaybackController.showPlaybackControls();
+          }
+        }
+        this.navigateSpatial(direction);
+      }
+
+      handleEnterAction() {
+        if (this.currentFocusedElement &&
+            this.currentFocusedElement.matches('.channel-row.selected') &&
+            videoPlaybackController && videoPlaybackController.currentItem &&
+            !videoPlaybackController.isFullscreen &&
+            window.NativePlayback && window.NativePlayback.isActive()) {
+          videoPlaybackController.toggleFullscreen();
+        } else if (this.currentFocusedElement) {
+          this.currentFocusedElement.click();
+        }
+      }
+
+      handleMenuAction() {
+        if (videoPlaybackController && videoPlaybackController.isFullscreen) {
+          videoPlaybackController.showPlaybackControls();
+          return;
+        }
+        if (this.currentFocusedElement && this.currentFocusedElement.classList.contains('channel-row')) {
+          const chId = this.currentFocusedElement.dataset.id;
+          if (chId) toggleFavorite(chId);
+          return;
+        }
+        openModal('modal-settings');
       }
 
       handleModalKey(e, modal) {
@@ -905,11 +1022,51 @@
           return;
         }
 
-        // 1. Sequential navigation for lists; media grids move vertically by one row.
-        const currentListContainer = this.currentFocusedElement.closest('.categories-list, .channels-list, .audio-channel-picker, #global-search-results');
+        const current = this.currentFocusedElement;
+        const inSidebar = current.closest('.live-sidebar');
+        const inCategories = current.closest('.categories-list');
+        const inChannels = current.closest('.channels-list');
+        const inPlayerCol = current.closest('.live-player-col');
+
+        // 1. Column-to-column transition in Unified Content Browser (RTL-aware):
+        if (direction === 'left') {
+          // In RTL layout: Left moves from Sidebar -> Categories -> Channels -> Player
+          if (inSidebar) {
+            const activeCategory = document.querySelector('.categories-list .category-item.active') ||
+              document.querySelector('.categories-list .focusable:not([disabled])');
+            if (activeCategory) { this.focusElement(activeCategory); return; }
+          } else if (inCategories) {
+            const activeChannel = document.querySelector('.channels-list .channel-row.selected') ||
+              document.querySelector('.channels-list .focusable:not([disabled])');
+            if (activeChannel) { this.focusElement(activeChannel); return; }
+          } else if (inChannels) {
+            const playerBtn = document.querySelector('#btn-toggle-fullscreen') ||
+              document.querySelector('#btn-toggle-play') ||
+              document.querySelector('.live-player-col .focusable:not([disabled])');
+            if (playerBtn) { this.focusElement(playerBtn); return; }
+          }
+        } else if (direction === 'right') {
+          // In RTL layout: Right moves from Player -> Channels -> Categories -> Sidebar
+          if (inPlayerCol) {
+            const activeChannel = document.querySelector('.channels-list .channel-row.selected') ||
+              document.querySelector('.channels-list .focusable:not([disabled])');
+            if (activeChannel) { this.focusElement(activeChannel); return; }
+          } else if (inChannels) {
+            const activeCategory = document.querySelector('.categories-list .category-item.active') ||
+              document.querySelector('.categories-list .focusable:not([disabled])');
+            if (activeCategory) { this.focusElement(activeCategory); return; }
+          } else if (inCategories) {
+            const activeSidebar = document.querySelector('.live-sidebar .sidebar-nav-item.active') ||
+              document.querySelector('.live-sidebar .focusable:not([disabled])');
+            if (activeSidebar) { this.focusElement(activeSidebar); return; }
+          }
+        }
+
+        // 2. Sequential vertical navigation inside lists
+        const currentListContainer = current.closest('.categories-list, .channels-list, .audio-channel-picker, #global-search-results, .tv-quick-bar');
         if (currentListContainer && (direction === 'up' || direction === 'down')) {
           const listItems = Array.from(currentListContainer.querySelectorAll('.focusable:not([disabled])'));
-          const idx = listItems.indexOf(this.currentFocusedElement);
+          const idx = listItems.indexOf(current);
           if (idx !== -1 && currentListContainer.classList.contains('media-grid')) {
             const rowStep = 3;
             if (direction === 'up' && idx >= rowStep) {
@@ -922,9 +1079,9 @@
                 return;
               }
               if (loadMoreChannelRows()) {
-                const expandedItems = Array.from(currentListContainer.querySelectorAll('.focusable:not([disabled])'));
-                if (expandedItems[idx + rowStep]) {
-                  this.focusElement(expandedItems[idx + rowStep]);
+                const expanded = Array.from(currentListContainer.querySelectorAll('.focusable:not([disabled])'));
+                if (expanded[idx + rowStep]) {
+                  this.focusElement(expanded[idx + rowStep]);
                   return;
                 }
               }
@@ -938,24 +1095,24 @@
               return;
             } else if (direction === 'down' && currentListContainer.classList.contains('channels-list')) {
               if (loadMoreChannelRows()) {
-                const expandedItems = Array.from(currentListContainer.querySelectorAll('.focusable:not([disabled])'));
-                if (expandedItems[idx + 1]) this.focusElement(expandedItems[idx + 1]);
+                const expanded = Array.from(currentListContainer.querySelectorAll('.focusable:not([disabled])'));
+                if (expanded[idx + 1]) this.focusElement(expanded[idx + 1]);
                 return;
               }
             }
           }
         }
 
-        // 2. Spatial geometric fallback across different columns and screen regions
+        // 3. Spatial geometric fallback across different screen regions
         const visibleFocusables = this.getVisibleFocusableElements();
         if (!visibleFocusables.length) return;
 
-        const currentRect = this.currentFocusedElement.getBoundingClientRect();
+        const currentRect = current.getBoundingClientRect();
         let bestTarget = null;
         let minDistance = Infinity;
 
         visibleFocusables.forEach(target => {
-          if (target === this.currentFocusedElement) return;
+          if (target === current) return;
           const rect = target.getBoundingClientRect();
 
           let isCandidate = false;
@@ -1177,7 +1334,16 @@
       const focusDialog = () => {
         if (!modal.classList.contains('active')) return;
         if (isSubtitlePopover && modal._sonixSubtitlePositionHandler) modal._sonixSubtitlePositionHandler();
-        const firstFocusable = modal.querySelector('.focusable:not([disabled])');
+        if (modalId === 'modal-power') {
+          const cancelBtn = document.getElementById('btn-cancel-exit');
+          if (cancelBtn && remoteNavigator) { remoteNavigator.focusElement(cancelBtn); return; }
+        }
+        if (modalId === 'modal-search') {
+          const searchInput = document.getElementById('global-search-input');
+          if (searchInput && remoteNavigator) { remoteNavigator.focusElement(searchInput); return; }
+        }
+        const bodyFocusable = modal.querySelector('.modal-body .focusable:not([disabled]), .modal-footer .focusable:not([disabled])');
+        const firstFocusable = bodyFocusable || modal.querySelector('.focusable:not([disabled])');
         if (firstFocusable && remoteNavigator) remoteNavigator.focusElement(firstFocusable);
       };
       if (isFullscreenAudioDialog || isSubtitlePopover) {
@@ -1896,6 +2062,31 @@
       };
       document.addEventListener('focusin', syncNativeTextFocus, true);
       document.addEventListener('focusout', () => window.setTimeout(syncNativeTextFocus, 0), true);
+
+      let lastFocusedLoginInput = document.getElementById('login-server');
+      ['login-server','login-username','login-password'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) {
+          input.addEventListener('focus', () => { lastFocusedLoginInput = input; });
+        }
+      });
+
+      document.querySelectorAll('.tv-quick-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const target = lastFocusedLoginInput || document.getElementById('login-server');
+          if (!target) return;
+          const insertText = btn.dataset.insert;
+          const action = btn.dataset.action;
+          if (action === 'clear') {
+            target.value = '';
+          } else if (insertText) {
+            target.value = (target.value || '') + insertText;
+          }
+          target.dispatchEvent(new Event('input', { bubbles: true }));
+          if (remoteNavigator) remoteNavigator.focusElement(target);
+        });
+      });
 
       document.getElementById('login-submit').addEventListener('click', () => performXtreamLogin(
         document.getElementById('login-server').value,

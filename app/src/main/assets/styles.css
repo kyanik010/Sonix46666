@@ -83,6 +83,17 @@
       z-index: 10;
     }
 
+    input.focusable:focus,
+    input.focusable.keyboard-focused,
+    textarea.focusable:focus,
+    textarea.focusable.keyboard-focused {
+      outline: none !important;
+      transform: none !important;
+      border-color: var(--focus-blue) !important;
+      box-shadow: 0 0 0 3px var(--focus-blue), 0 0 20px var(--focus-glow) !important;
+      z-index: 10;
+    }
+
     .focusable:active {
       transform: scale(0.96) !important;
     }
@@ -1846,6 +1857,10 @@
     .sonix-login-card .sonix-brand{gap:2px}
     .sonix-login-card .sonix-title-row{font-size:clamp(1.25rem,2.8vh,1.65rem)}
     .sonix-login-card input{width:100%;height:clamp(36px,5.2vh,42px);min-height:36px;border-radius:8px;padding:0 12px;background:#0A0F14;color:#fff;border:1px solid #1E2A36;font:inherit;direction:ltr;text-align:left}
+    .tv-quick-bar{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px;justify-content:center}
+    .tv-quick-btn{flex:1 1 auto;min-width:48px;height:32px;padding:0 8px;font-size:.78rem;font-weight:700;border-radius:6px;background:#141E28 !important;color:#8FB8E8 !important;border:1px solid #1E2A36 !important;cursor:pointer}
+    .tv-quick-btn.btn-clear{color:#FF5A5A !important;background:#241418 !important}
+    .tv-quick-btn:focus,.tv-quick-btn.keyboard-focused{background:#1E2E40 !important;border-color:var(--focus-blue) !important;box-shadow:0 0 0 2px var(--focus-blue) !important}
     .sonix-login-card button{min-height:38px;border:0;border-radius:8px;background:var(--accent-gold);color:#0A0F14;font:inherit;font-weight:900}
     #sonix-login-message{min-height:16px;color:var(--danger-red);font-size:.78rem;text-align:center}
     .provider-logo{width:30px;height:30px;object-fit:contain;border-radius:5px}

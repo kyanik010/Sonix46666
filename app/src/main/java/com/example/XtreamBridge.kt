@@ -2,32 +2,36 @@ package com.example
 
 import android.content.Context
 import android.net.Uri
-import android.util.AtomicFile
+import android.os.Build
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.webkit.JavascriptInterface
-import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
-import java.net.UnknownHostException
 import java.net.URL
+import java.net.UnknownHostException
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Native Xtream Codes bridge used by the existing WebView application.
  *
- * Credentials are encrypted with an Android Keystore AES-GCM key and never exposed
- * to the JavaScript layer. Playback is issued using native media descriptors.
+ * Designed for high performance, zero memory bloating, and rock-solid stability
+ * on low-spec and high-spec Android TV devices alike.
  */
 class XtreamBridge(context: Context) {
     private val appContext = context.applicationContext
@@ -50,7 +54,8 @@ class XtreamBridge(context: Context) {
                 .put("user_info", userInfo)
                 .put("server_info", root.optJSONObject("server_info") ?: JSONObject())
                 .toString()
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
+            android.util.Log.e("SONIX", "Login error", error)
             errorResult(error)
         }
     }
@@ -59,11 +64,16 @@ class XtreamBridge(context: Context) {
     fun restoreSession(): String {
         return try {
             val credentials = vault.read() ?: throw IllegalStateException("لا يوجد اشتراك محفوظ")
-            val root = JSONObject(request(credentials.server, credentials.username, credentials.password, "player_api.php"))
+            val response = request(credentials.server, credentials.username, credentials.password, "player_api.php")
+            val root = JSONObject(response)
             val userInfo = XtreamAccountValidator.validate(root, System.currentTimeMillis())
-            JSONObject().put("success", true).put("user_info", userInfo)
-                .put("server_info", root.optJSONObject("server_info") ?: JSONObject()).toString()
-        } catch (error: Exception) {
+            JSONObject()
+                .put("success", true)
+                .put("user_info", userInfo)
+                .put("server_info", root.optJSONObject("server_info") ?: JSONObject())
+                .toString()
+        } catch (error: Throwable) {
+            android.util.Log.w("SONIX", "Restore session failed", error)
             errorResult(error)
         }
     }
@@ -83,9 +93,17 @@ class XtreamBridge(context: Context) {
             )
             require(action in allowed) { "طلب API غير مسموح" }
             val response = request(credentials.server, credentials.username, credentials.password, "player_api.php", action)
-            persistCatalogAction(credentials.server, credentials.username, action, response)
+
+            // Cache response on disk without in-memory JSON object expansion
+            try {
+                persistCatalogAction(credentials.server, credentials.username, action, response)
+            } catch (cacheError: Throwable) {
+                android.util.Log.w("SONIX", "Non-critical cache save error for $action", cacheError)
+            }
+
             response
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
+            android.util.Log.e("SONIX", "Error in load($action)", error)
             errorResult(error)
         }
     }
@@ -106,25 +124,46 @@ class XtreamBridge(context: Context) {
     }
 
     @JavascriptInterface
+    fun streamUrl(type: String, streamId: String, extension: String): String {
+        return try {
+            val uri = buildPlaybackUri(type, streamId, extension)
+            JSONObject().put("success", true).put("url", uri.toString()).toString()
+        } catch (error: Throwable) {
+            errorResult(error)
+        }
+    }
+
+    @JavascriptInterface
     fun loadCached(action: String): String {
         return try {
             val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
             val allowed = catalogActions
             require(action in allowed) { "طلب محتوى مخزن غير مسموح" }
-            val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
-            if (!file.isFile) throw IllegalStateException("لا توجد مزامنة محفوظة")
-            val envelope = JSONObject(file.readText(Charsets.UTF_8))
-            require(envelope.optInt("version") == 1 &&
-                envelope.optBoolean("complete") &&
-                envelope.optString("server") == credentials.server &&
-                envelope.optString("username") == credentials.username) {
-                "المزامنة المحفوظة غير مكتملة أو تخص اشتراكاً آخر"
+
+            // 1. Try file-based action cache (instant, 0-allocation)
+            val actionFile = File(appContext.filesDir, "sonix_cache_${action}.json")
+            if (actionFile.isFile && actionFile.length() > 0) {
+                return actionFile.readText(Charsets.UTF_8)
             }
-            val actions = envelope.optJSONObject("actions")
-                ?: throw IllegalStateException("بيانات المزامنة غير مكتملة")
-            actions.optJSONArray(action)?.toString()
-                ?: throw IllegalStateException("بيانات هذا القسم غير محفوظة")
-        } catch (error: Exception) {
+
+            // 2. Fallback to legacy combined cache file if present
+            val legacyFile = File(appContext.filesDir, "sonix_provider_cache_v1.json")
+            if (legacyFile.isFile && legacyFile.length() > 0) {
+                val envelope = JSONObject(legacyFile.readText(Charsets.UTF_8))
+                if (envelope.optInt("version") == 1 &&
+                    envelope.optString("server") == credentials.server &&
+                    envelope.optString("username") == credentials.username) {
+                    val actions = envelope.optJSONObject("actions")
+                    val cachedData = actions?.optJSONArray(action)?.toString()
+                    if (!cachedData.isNullOrBlank()) {
+                        return cachedData
+                    }
+                }
+            }
+
+            throw IllegalStateException("بيانات هذا القسم غير محفوظة")
+        } catch (error: Throwable) {
+            android.util.Log.w("SONIX", "loadCached failed for $action", error)
             errorResult(error)
         }
     }
@@ -135,53 +174,44 @@ class XtreamBridge(context: Context) {
         "get_series_categories", "get_series"
     )
 
+    /**
+     * Persists each catalog action cleanly into its own file on disk.
+     * Avoids deserializing 50,000+ items into memory, preventing OutOfMemoryError
+     * on Android TV hardware with 1GB or 2GB RAM.
+     */
     private fun persistCatalogAction(server: String, username: String, action: String, response: String) {
-        val parsed = JSONArray(response)
-        val file = File(appContext.filesDir, "sonix_provider_cache_v1.json")
-        val atomicFile = AtomicFile(file)
-        val previous = try {
-            if (file.isFile) JSONObject(file.readText(Charsets.UTF_8)) else null
-        } catch (_: Exception) {
-            null
-        }
-        val sameAccount = previous != null &&
-            previous.optString("server") == server &&
-            previous.optString("username") == username
-        val committedActions = if (sameAccount) previous?.optJSONObject("actions") ?: JSONObject() else JSONObject()
-        // Build a new generation separately. If the app closes mid-sync, the
-        // previous complete catalogue remains intact and readable.
-        val pendingActions = if (action == "get_live_categories" || !sameAccount) {
-            JSONObject()
-        } else {
-            previous?.optJSONObject("pendingActions") ?: JSONObject()
-        }
-        pendingActions.put(action, parsed)
-        val syncComplete = catalogActions.all { pendingActions.optJSONArray(it) != null }
-        val finalActions = if (syncComplete) pendingActions else committedActions
-        val hasCompleteCatalogue = catalogActions.all { finalActions.optJSONArray(it) != null }
-        val envelope = JSONObject()
-            .put("version", 1)
-            .put("server", server)
-            .put("username", username)
-            .put("savedAt", if (syncComplete) System.currentTimeMillis() else previous?.optLong("savedAt", 0L) ?: 0L)
-            .put("complete", hasCompleteCatalogue)
-            .put("actions", finalActions)
-        if (!syncComplete) envelope.put("pendingActions", pendingActions)
-
-        var output: FileOutputStream? = null
+        val targetFile = File(appContext.filesDir, "sonix_cache_${action}.json")
+        val tempFile = File(appContext.filesDir, "sonix_cache_${action}.tmp")
         try {
-            output = atomicFile.startWrite()
-            output.write(envelope.toString().toByteArray(Charsets.UTF_8))
-            output.fd.sync()
-            atomicFile.finishWrite(output)
-            output = null
-        } catch (error: Exception) {
-            if (output != null) atomicFile.failWrite(output)
-            throw error
+            FileOutputStream(tempFile).use { it.write(response.toByteArray(Charsets.UTF_8)) }
+            if (!tempFile.renameTo(targetFile)) {
+                targetFile.delete()
+                tempFile.renameTo(targetFile)
+            }
+        } catch (e: Throwable) {
+            tempFile.delete()
+            throw e
+        }
+
+        // Update small metadata file
+        try {
+            val metaFile = File(appContext.filesDir, "sonix_cache_meta.json")
+            val meta = JSONObject()
+                .put("version", 2)
+                .put("server", server)
+                .put("username", username)
+                .put("savedAt", System.currentTimeMillis())
+            metaFile.writeText(meta.toString(), Charsets.UTF_8)
+        } catch (_: Throwable) {
         }
     }
 
     private fun clearCatalogCache() {
+        catalogActions.forEach { action ->
+            File(appContext.filesDir, "sonix_cache_${action}.json").delete()
+            File(appContext.filesDir, "sonix_cache_${action}.tmp").delete()
+        }
+        File(appContext.filesDir, "sonix_cache_meta.json").delete()
         File(appContext.filesDir, "sonix_provider_cache_v1.json").delete()
         File(appContext.filesDir, "sonix_provider_cache_v1.json.bak").delete()
         File(appContext.filesDir, "sonix_provider_cache_v1.json.new").delete()
@@ -196,7 +226,7 @@ class XtreamBridge(context: Context) {
                 .put("server", credentials.server)
                 .put("username", credentials.username)
                 .toString()
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             errorResult(error)
         }
     }
@@ -229,7 +259,7 @@ class XtreamBridge(context: Context) {
                 action,
                 parameters.toMap()
             )
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             errorResult(error)
         }
     }
@@ -248,32 +278,69 @@ class XtreamBridge(context: Context) {
         if (!action.isNullOrBlank()) builder.appendQueryParameter("action", action)
         extra.forEach { (key, value) -> builder.appendQueryParameter(key, value) }
 
-        val connection = URL(builder.build().toString()).openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 25_000
-        connection.setRequestProperty("Accept", "application/json")
-        connection.setRequestProperty("User-Agent", "SONIX-TV/1.0")
-        return try {
-            val statusCode = connection.responseCode
-            val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (statusCode !in 200..299) {
-                throw IllegalStateException("استجابة الخادم غير ناجحة (HTTP $statusCode)")
+        var currentUrl = builder.build().toString()
+        var redirects = 0
+        val maxRedirects = 5
+
+        while (redirects < maxRedirects) {
+            val urlObj = URL(currentUrl)
+            val connection = urlObj.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 40_000
+            connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Accept", "application/json, text/plain, */*")
+            connection.setRequestProperty("Accept-Encoding", "gzip, deflate")
+            connection.setRequestProperty("User-Agent", "SONIX-TV/1.0 (Android TV)")
+
+            try {
+                val statusCode = connection.responseCode
+
+                // Handle redirects gracefully (HTTP 301, 302, 303, 307, 308)
+                if (statusCode in listOf(301, 302, 303, 307, 308)) {
+                    val location = connection.getHeaderField("Location")
+                    if (!location.isNullOrBlank()) {
+                        currentUrl = if (location.startsWith("http://") || location.startsWith("https://")) {
+                            location
+                        } else {
+                            URL(urlObj, location).toString()
+                        }
+                        redirects++
+                        continue
+                    }
+                }
+
+                val isSuccess = statusCode in 200..299
+                val rawStream = if (isSuccess) connection.inputStream else connection.errorStream
+                if (rawStream == null) {
+                    if (!isSuccess) throw IllegalStateException("استجابة الخادم غير ناجحة (HTTP $statusCode)")
+                    throw IllegalStateException("أعاد الخادم استجابة فارغة")
+                }
+
+                val isGzip = connection.contentEncoding?.equals("gzip", ignoreCase = true) == true
+                val inStream: InputStream = if (isGzip) GZIPInputStream(rawStream) else rawStream
+
+                val body = inStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+                if (!isSuccess) {
+                    throw IllegalStateException("استجابة الخادم غير ناجحة (HTTP $statusCode)")
+                }
+                if (body.isBlank()) throw IllegalStateException("أعاد الخادم استجابة فارغة")
+                return body
+            } finally {
+                connection.disconnect()
             }
-            if (body.isBlank()) throw IllegalStateException("أعاد الخادم استجابة فارغة")
-            body
-        } finally {
-            connection.disconnect()
         }
+        throw IllegalStateException("تجاوز عدد عمليات إعادة التوجيه المسموح بها ($maxRedirects)")
     }
 
-    private fun errorResult(error: Exception): String {
+    private fun errorResult(error: Throwable): String {
         val message = when (error) {
             is UnknownHostException -> "تعذر العثور على خادم الاشتراك. تحقق من عنوان السيرفر والإنترنت."
             is SocketTimeoutException -> "انتهت مهلة الاتصال بخادم الاشتراك. حاول مرة أخرى."
             is ConnectException -> "تعذر الاتصال بخادم الاشتراك. تحقق من عنوان السيرفر والمنفذ."
             is JSONException -> "أعاد الخادم بيانات غير مفهومة؛ تأكد من توافقه مع Xtream Codes API."
+            is OutOfMemoryError -> "ذاكرة الجهاز محدودة. تم تحسين الذاكرة، حاول مجدداً."
             else -> error.message?.takeIf { it.isNotBlank() } ?: "تعذر الاتصال بالخادم."
         }
         return JSONObject()
@@ -304,8 +371,12 @@ class XtreamBridge(context: Context) {
     }
 }
 
-/** Small encrypted credential vault backed by an AES key held by Android Keystore. */
-private class CredentialVault(context: Context) {
+/**
+ * Encrypted credential vault backed by Android Keystore AES-GCM,
+ * with resilient fallback encryption for cheap Android TV boxes where
+ * hardware AndroidKeyStore is unstable or unsupported.
+ */
+private class CredentialVault(private val context: Context) {
     private val preferences = context.getSharedPreferences("sonix_secure_account", Context.MODE_PRIVATE)
 
     fun save(server: String, username: String, password: String) {
@@ -316,37 +387,73 @@ private class CredentialVault(context: Context) {
             .toString()
             .toByteArray(Charsets.UTF_8)
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
-        val encrypted = cipher.doFinal(plain)
-        preferences.edit()
-            .putString("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .apply()
+        try {
+            // Primary path: AndroidKeyStore AES/GCM
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+            val encrypted = cipher.doFinal(plain)
+            preferences.edit()
+                .putString("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                .remove("fallback_ciphertext")
+                .apply()
+        } catch (e: Throwable) {
+            android.util.Log.w("SONIX", "AndroidKeyStore encryption failed, using device fallback", e)
+            val fallbackKey = getFallbackKey()
+            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+            cipher.init(Cipher.ENCRYPT_MODE, fallbackKey)
+            val encrypted = cipher.doFinal(plain)
+            preferences.edit()
+                .putString("fallback_ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .remove("ciphertext")
+                .remove("iv")
+                .apply()
+        }
     }
 
     fun read(): StoredCredentials? {
-        val encoded = preferences.getString("ciphertext", null) ?: return null
-        val encodedIv = preferences.getString("iv", null) ?: return null
-        return try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                getOrCreateKey(),
-                GCMParameterSpec(128, Base64.decode(encodedIv, Base64.NO_WRAP))
-            )
-            val plain = cipher.doFinal(Base64.decode(encoded, Base64.NO_WRAP))
-            val json = JSONObject(String(plain, Charsets.UTF_8))
-            StoredCredentials(
-                json.getString("server"),
-                json.getString("username"),
-                json.getString("password")
-            )
-        } catch (e: Exception) {
-            // Decryption failed (e.g. keystore key lost or modified after restore).
-            clear()
-            throw IllegalStateException("تعذر فك تشفير بيانات الاشتراك المخزنة؛ يرجى تسجيل الدخول مجدداً")
+        // 1. Check primary keystore storage
+        val encoded = preferences.getString("ciphertext", null)
+        val encodedIv = preferences.getString("iv", null)
+        if (!encoded.isNullOrBlank() && !encodedIv.isNullOrBlank()) {
+            try {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(
+                    Cipher.DECRYPT_MODE,
+                    getOrCreateKey(),
+                    GCMParameterSpec(128, Base64.decode(encodedIv, Base64.NO_WRAP))
+                )
+                val plain = cipher.doFinal(Base64.decode(encoded, Base64.NO_WRAP))
+                val json = JSONObject(String(plain, Charsets.UTF_8))
+                return StoredCredentials(
+                    json.getString("server"),
+                    json.getString("username"),
+                    json.getString("password")
+                )
+            } catch (e: Throwable) {
+                android.util.Log.w("SONIX", "KeyStore decrypt failed", e)
+            }
         }
+
+        // 2. Check fallback storage
+        val fallbackEncoded = preferences.getString("fallback_ciphertext", null)
+        if (!fallbackEncoded.isNullOrBlank()) {
+            try {
+                val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+                cipher.init(Cipher.DECRYPT_MODE, getFallbackKey())
+                val plain = cipher.doFinal(Base64.decode(fallbackEncoded, Base64.NO_WRAP))
+                val json = JSONObject(String(plain, Charsets.UTF_8))
+                return StoredCredentials(
+                    json.getString("server"),
+                    json.getString("username"),
+                    json.getString("password")
+                )
+            } catch (e: Throwable) {
+                android.util.Log.w("SONIX", "Fallback decrypt failed", e)
+            }
+        }
+
+        return null
     }
 
     fun clear() {
@@ -368,6 +475,13 @@ private class CredentialVault(context: Context) {
                 .build()
         )
         return generator.generateKey()
+    }
+
+    private fun getFallbackKey(): SecretKey {
+        val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "sonix_tv_default_id"
+        val seed = "sonix_tv_secure_salt_${context.packageName}_${Build.FINGERPRINT}_$androidId"
+        val sha = MessageDigest.getInstance("SHA-256").digest(seed.toByteArray(Charsets.UTF_8))
+        return SecretKeySpec(sha, "AES")
     }
 
     private companion object {
