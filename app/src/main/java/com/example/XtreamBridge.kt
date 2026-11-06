@@ -195,7 +195,7 @@ class XtreamBridge(context: Context) {
             val cached = file.readText(Charsets.UTF_8)
             val expectedPrefix = "{\"success\":true,\"version\":2,\"section\":${JSONObject.quote(section)}," +
                 "\"server\":${JSONObject.quote(credentials.server)},\"username\":${JSONObject.quote(credentials.username)},\"savedAt\":"
-            require(cached.startsWith(expectedPrefix) && cached.contains("\"categories\":[") && cached.contains("\"items\":[")) {
+            require(cached.startsWith(expectedPrefix) && cached.contains("\"categories\":") && cached.contains("\"items\":")) {
                 "بيانات القسم المحفوظة غير مكتملة"
             }
             cached
