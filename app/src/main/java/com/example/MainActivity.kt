@@ -194,6 +194,17 @@ class MainActivity : ComponentActivity() {
                 addJavascriptInterface(NativePlaybackBridge(), "NativePlayback")
             }
 
+            xtreamBridge.setAsyncResultHandler { requestId, result ->
+                val quotedId = JSONObject.quote(requestId)
+                val quotedResult = JSONObject.quote(result)
+                wv.post {
+                    wv.evaluateJavascript(
+                        "window.onXtreamSectionLoaded && window.onXtreamSectionLoaded($quotedId, $quotedResult)",
+                        null
+                    )
+                }
+            }
+
             webView = wv
             val root = FrameLayout(this).apply {
                 background = SonixBackgroundDrawable()
@@ -1566,6 +1577,7 @@ class MainActivity : ComponentActivity() {
         applyVideoFullscreenSystemUi()
         detachExternalAudioInternal(false)
         stopNativePlayer()
+        if (::xtreamBridge.isInitialized) xtreamBridge.shutdown()
         subtitleIoExecutor.shutdownNow()
         codecDiagnosticsExecutor.shutdownNow()
         webView?.destroy()

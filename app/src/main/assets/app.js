@@ -978,6 +978,7 @@
       }
 
       handleBackAction() {
+        if (cancelActiveCatalogSync()) return;
         // The login gate is a standalone screen, not a view. Back must not
         // route around it or open the power dialog while credentials are entered.
         const loginScreen = document.getElementById('sonix-login-screen');
@@ -1466,12 +1467,6 @@
       const message = String(error && error.message ? error.message : error || '');
       return /تعذر العثور على خادم|انتهت مهلة الاتصال|تعذر الاتصال بخادم|فشل اتصال الخادم|قوائم محتوى فارغة|unable to resolve|failed to connect|connection refused|timed out|network|HTTP 5\d\d/i.test(message);
     }
-    function nativeArray(action, fromCache = false) {
-      const raw = fromCache ? window.XtreamBridge.loadCached(action) : window.XtreamBridge.load(action);
-      const value = parseNative(raw);
-      if (!Array.isArray(value)) throw new Error('استجابة غير صالحة من الخادم: ' + action);
-      return value;
-    }
     function makeCategories(rows, prefix) {
       return rows.map(row => ({id:prefix + String(row.category_id), providerId:String(row.category_id), name:row.category_name || 'تصنيف'}));
     }
@@ -1488,66 +1483,117 @@
       const ext = (item.container_extension || (type === 'live' ? 'ts' : 'mp4')).replace(/^\./,'');
       return parseNative(window.XtreamBridge.streamUrl(type,String(id),ext)).url;
     }
-    function loadXtreamContent(fromCache = false) {
-      const lc = makeCategories(nativeArray('get_live_categories',fromCache),'live-');
-      const mc = makeCategories(nativeArray('get_vod_categories',fromCache),'movie-');
-      const sc = makeCategories(nativeArray('get_series_categories',fromCache),'series-');
-      const categoryName = (list,prefix,id) => (list._nameById && list._nameById.get(String(id))) || '';
-      [lc,mc,sc].forEach(list => { list._nameById = new Map(list.map(item => [item.providerId, item.name])); });
-      const rawLive = nativeArray('get_live_streams',fromCache);
-      const rawMovies = nativeArray('get_vod_streams',fromCache);
-      const rawSeries = nativeArray('get_series',fromCache);
-      if (rawLive.length + rawMovies.length + rawSeries.length === 0) {
-        throw new Error('أعاد الخادم قوائم محتوى فارغة؛ لن نستبدل البيانات السابقة');
-      }
-      liveCategories = orderCategories([{id:'all',name:'جميع القنوات'}, ...lc, {id:'favorites',name:'المفضلة'}], 'جميع القنوات');
-      liveChannels = rawLive.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'قناة',
-        category:x.category_id == null ? '' : 'live-' + x.category_id,categoryName:categoryName(lc,'live-',x.category_id),
-        logo:x.stream_icon || '',logoText:'',streamUrl:'',
-        epgChannelId:x.epg_channel_id || '',containerExtension:x.container_extension || 'ts'}));
-      movieCategories = orderCategories([{id:'all',name:'جميع الأفلام'}, ...mc, {id:'favorites',name:'المفضلة'}], 'جميع الأفلام');
-      movies = rawMovies.map((x,i) => ({id:String(x.stream_id),number:i+1,name:x.name || 'فيلم',
-        category:x.category_id == null ? '' : 'movie-' + x.category_id,categoryName:categoryName(mc,'movie-',x.category_id),
-        logo:x.stream_icon || '',logoText:'',streamUrl:'',
-        rating:x.rating || '',desc:x.plot || '',containerExtension:x.container_extension || 'mp4'}));
-      seriesCategories = orderCategories([{id:'all',name:'جميع المسلسلات'}, ...sc, {id:'favorites',name:'المفضلة'}], 'جميع المسلسلات');
-      series = rawSeries.map((x,i) => ({id:String(x.series_id),seriesId:String(x.series_id),number:i+1,name:x.name || 'مسلسل',
-        category:x.category_id == null ? '' : 'series-' + x.category_id,categoryName:categoryName(sc,'series-',x.category_id),
-        logo:x.cover || '',logoText:'',streamUrl:'',rating:x.rating || '',desc:x.plot || ''}));
-      // XtreamBridge persists each API response atomically as it arrives.
-      // The native cache is marked complete only after all six responses exist.
-      isOfflineCache = Boolean(fromCache);
-      const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display='none';
-      renderCategories(); renderItems(); renderAudioSourcePicker();
-    }
     function restoreXtreamCache() {
-      try {
-        // Read the six already-synchronized API responses from Android storage.
-        // This path performs no provider network requests.
-        loadXtreamContent(true);
-        const hasContent=liveChannels.length + movies.length + series.length > 0;
-        isOfflineCache=hasContent;
-        const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
-        return hasContent;
-      } catch (nativeCacheError) {
-        // Keep compatibility with the older WebView cache for an upgrade path.
-        try {
-          const c=JSON.parse(localStorage.getItem('sonix_provider_cache_v1') || 'null');
-          if (!c || !Array.isArray(c.liveChannels) || !Array.isArray(c.movies) ||
-              !Array.isArray(c.series) || !Array.isArray(c.liveCategories) ||
-              !Array.isArray(c.movieCategories) || !Array.isArray(c.seriesCategories)) return false;
-          liveCategories=orderCategories(c.liveCategories,'جميع القنوات'); liveChannels=c.liveChannels;
-          movieCategories=orderCategories(c.movieCategories,'جميع الأفلام'); movies=c.movies;
-          seriesCategories=orderCategories(c.seriesCategories,'جميع المسلسلات'); series=c.series;
-          const hasContent=liveChannels.length + movies.length + series.length > 0;
-          const cacheNote=document.getElementById('cache-status'); if(cacheNote) cacheNote.style.display=hasContent?'block':'none';
-          return hasContent;
-        } catch (_) {
-          console.warn('Unable to restore provider catalogue', nativeCacheError);
-          return false;
-        }
-      }
+      return prepareCatalogHome();
     }
+    const CATALOG_SECTIONS={live:{card:'card-channels',mode:'live',prefix:'live-',label:'القنوات'},movies:{card:'card-movies',mode:'movies',prefix:'movie-',label:'الأفلام'},series:{card:'card-series',mode:'series',prefix:'series-',label:'المسلسلات'}};
+    const catalogSyncRequests=new Map();
+    const catalogSyncStates={live:'missing',movies:'missing',series:'missing'};
+    const catalogSavedAt={live:0,movies:0,series:0};
+    const catalogAutoRefreshAttempt={live:0,movies:0,series:0};
+    let catalogRequestSequence=0,lastCatalogRequestId=null;
+
+    function setCatalogCardState(section,state,message=''){
+      const config=CATALOG_SECTIONS[section],card=config&&document.getElementById(config.card);
+      const overlay=card&&card.querySelector('[data-catalog-overlay]');
+      if(!card||!overlay)return;
+      catalogSyncStates[section]=state;card.classList.toggle('catalog-ready',state==='ready');
+      const prompt=overlay.querySelector('.catalog-sync-prompt'),loading=overlay.querySelector('.catalog-sync-loading');
+      const error=overlay.querySelector('.catalog-sync-error'),errorText=overlay.querySelector('.catalog-sync-error-text');
+      if(prompt)prompt.hidden=state!=='missing'&&state!=='cached';
+      if(loading)loading.hidden=state!=='loading';
+      if(error)error.hidden=state!=='error';
+      if(errorText)errorText.textContent=message||'تعذر الاتصال بالخادم';
+    }
+
+    function applyCatalogSection(section,payload){
+      const config=CATALOG_SECTIONS[section];
+      if(!config||!payload||!Array.isArray(payload.categories)||!Array.isArray(payload.items)||!payload.items.length)throw new Error('بيانات القسم المستلمة غير مكتملة');
+      const categories=makeCategories(payload.categories,config.prefix),names=new Map(categories.map(item=>[item.providerId,item.name]));
+      if(section==='live'){
+        liveCategories=orderCategories([{id:'all',name:'جميع القنوات'},...categories,{id:'favorites',name:'المفضلة'}],'جميع القنوات');
+        liveChannels=payload.items.map((x,i)=>({id:String(x.stream_id),number:i+1,name:x.name||'قناة',category:x.category_id==null?'':'live-'+x.category_id,categoryName:names.get(String(x.category_id))||'',logo:x.stream_icon||'',logoText:'',streamUrl:'',epgChannelId:x.epg_channel_id||'',containerExtension:x.container_extension||'ts'}));
+      }else if(section==='movies'){
+        movieCategories=orderCategories([{id:'all',name:'جميع الأفلام'},...categories,{id:'favorites',name:'المفضلة'}],'جميع الأفلام');
+        movies=payload.items.map((x,i)=>({id:String(x.stream_id),number:i+1,name:x.name||'فيلم',category:x.category_id==null?'':'movie-'+x.category_id,categoryName:names.get(String(x.category_id))||'',logo:x.stream_icon||'',logoText:'',streamUrl:'',rating:x.rating||'',desc:x.plot||'',containerExtension:x.container_extension||'mp4'}));
+      }else{
+        seriesCategories=orderCategories([{id:'all',name:'جميع المسلسلات'},...categories,{id:'favorites',name:'المفضلة'}],'جميع المسلسلات');
+        series=payload.items.map((x,i)=>({id:String(x.series_id),seriesId:String(x.series_id),number:i+1,name:x.name||'مسلسل',category:x.category_id==null?'':'series-'+x.category_id,categoryName:names.get(String(x.category_id))||'',logo:x.cover||'',logoText:'',streamUrl:'',rating:x.rating||'',desc:x.plot||''}));
+      }
+      catalogSavedAt[section]=Number(payload.savedAt||Date.now());
+      if(currentAppMode===config.mode){currentActiveCategory='all';renderCategories();renderItems();if(section==='live')renderAudioSourcePicker();}
+    }
+
+    function startCatalogSync(section,options={}){
+      const config=CATALOG_SECTIONS[section];
+      if(!config||!activeCredentials||!window.XtreamBridge||catalogSyncRequests.has(section))return false;
+      const silent=Boolean(options.silent),requestId='catalog-'+section+'-'+(++catalogRequestSequence)+'-'+Date.now();
+      catalogSyncRequests.set(section,{requestId,silent});lastCatalogRequestId=requestId;catalogAutoRefreshAttempt[section]=Date.now();
+      if(!silent)setCatalogCardState(section,'loading');
+      try{window.XtreamBridge.loadSectionAsync(section,requestId);}
+      catch(error){catalogSyncRequests.delete(section);if(!silent)setCatalogCardState(section,'error',error.message||'تعذر بدء التحميل');return false;}
+      return true;
+    }
+
+    window.onXtreamSectionLoaded=function(requestId,rawResult){
+      let response;try{response=JSON.parse(rawResult);}catch(_){response={success:false,error:'استجابة غير مفهومة من خدمة المزامنة'};}
+      let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===requestId){section=key;break;}
+      if(!section)return;
+      const request=catalogSyncRequests.get(section);catalogSyncRequests.delete(section);
+      if(lastCatalogRequestId===requestId)lastCatalogRequestId=null;
+      if(response.success&&response.data){
+        try{applyCatalogSection(section,response.data);setCatalogCardState(section,request.silent&&catalogSyncStates[section]==='cached'?'cached':'ready');if(!request.silent)showToast('اكتملت مزامنة '+CATALOG_SECTIONS[section].label);}
+        catch(error){if(!request.silent)setCatalogCardState(section,'error',error.message);}
+      }else{
+        catalogAutoRefreshAttempt[section]=Date.now();
+        if(!request.silent){setCatalogCardState(section,'error',response.error||'تعذر الاتصال بالخادم');showToast('فشل تحميل '+CATALOG_SECTIONS[section].label);}
+      }
+    };
+
+    function cancelActiveCatalogSync(){
+      if(!lastCatalogRequestId)return false;
+      let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===lastCatalogRequestId){section=key;break;}
+      if(!section){lastCatalogRequestId=null;return false;}
+      const requestId=lastCatalogRequestId,request=catalogSyncRequests.get(section);
+      catalogSyncRequests.delete(section);lastCatalogRequestId=null;
+      try{window.XtreamBridge.cancelSectionLoad(requestId);}catch(_){}
+      if(request&&!request.silent)setCatalogCardState(section,'missing');
+      showToast('تم إلغاء تحميل '+CATALOG_SECTIONS[section].label);return true;
+    }
+
+    function prepareCatalogHome(){
+      const now=Date.now();let hasCached=false;
+      Object.keys(CATALOG_SECTIONS).forEach(section=>{
+        let cached=null;
+        try{const value=parseNative(window.XtreamBridge.loadCachedSection(section));if(Array.isArray(value.categories)&&Array.isArray(value.items)&&value.items.length)cached=value;}catch(_){}
+        if(cached){
+          try{applyCatalogSection(section,cached);setCatalogCardState(section,'cached');hasCached=true;if(!cached.savedAt||now-Number(cached.savedAt)>=86400000)startCatalogSync(section,{silent:true});}
+          catch(_){setCatalogCardState(section,'missing');}
+        }else setCatalogCardState(section,'missing');
+      });
+      isOfflineCache=hasCached;return hasCached;
+    }
+
+    function checkCatalogRefreshDue(){
+      const now=Date.now();
+      Object.keys(CATALOG_SECTIONS).forEach(section=>{
+        if((catalogSyncStates[section]==='ready'||catalogSyncStates[section]==='cached')&&now-catalogSavedAt[section]>=86400000&&now-catalogAutoRefreshAttempt[section]>=86400000&&!catalogSyncRequests.has(section))startCatalogSync(section,{silent:true});
+      });
+    }
+
+    function openCatalogSection(section){
+      const config=CATALOG_SECTIONS[section];if(!config)return;
+      if(catalogSyncStates[section]!=='ready'){startCatalogSync(section);return;}
+      switchView('view-live');
+      if(section==='live'){if(window.NativePlayback&&typeof window.NativePlayback.stop==='function')window.NativePlayback.stop();if(videoPlaybackController){videoPlaybackController.currentItem=null;videoPlaybackController.hidePlaybackControls();}const panel=document.querySelector('.live-player-col');if(panel)panel.classList.remove('has-active-playback');}
+      setAppMode(config.mode);
+    }
+
+    function refreshDownloadedCatalogs(){
+      let started=false;Object.keys(CATALOG_SECTIONS).forEach(section=>{if(catalogSyncStates[section]==='ready'||catalogSyncStates[section]==='cached')started=startCatalogSync(section)||started;});
+      if(!started)showToast('حمّل أحد الأقسام أولاً لتحديث بياناته');
+    }
+
     function setLoginMessage(message, success) {
       const el=document.getElementById('sonix-login-message');
       if(el){el.textContent=message || '';el.style.color=success?'var(--success-green)':'var(--danger-red)';}
@@ -1572,13 +1618,14 @@
         activeCredentials={server:server.trim().replace(/\/+$/,''),username:result.user_info.username || username};
         isOfflineCache=false;
         updateAccount(result.user_info);
-        loadXtreamContent();
         const loginScreen = document.getElementById('sonix-login-screen');
         if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
         loginScreen.classList.add('hidden');
+        switchView('view-home');
+        window.setTimeout(prepareCatalogHome, 0);
         document.getElementById('login-password').value='';
         const settingsPassword=document.getElementById('iptv-password'); if(settingsPassword) settingsPassword.value='';
-        showToast('تم التحقق من الاشتراك وتحميل محتوى الخادم');
+        showToast('تم التحقق من الاشتراك؛ اختر القسم الذي تريد مزامنته');
       } catch(error) {
         if (offlineFallback) {
           try {
@@ -1592,6 +1639,7 @@
           const loginScreen = document.getElementById('sonix-login-screen');
           if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
           loginScreen.classList.add('hidden');
+          switchView('view-home');
           showToast('تعذر الاتصال؛ يتم عرض آخر بيانات مخزنة');
           renderCategories();renderItems();renderAudioSourcePicker();
         } else {
@@ -1679,28 +1727,12 @@
       } catch(error) { showToast(error.message || 'تعذر تحميل الحلقات'); }
     }
     function refreshXtreamContent(options = {}) {
-      const silent = Boolean(options && options.silent);
-      try {
-        if(!activeCredentials) throw new Error('سجّل الدخول أولاً');
-        const session=parseNative(window.XtreamBridge.restoreSession());
-        isOfflineCache=false;
-        updateAccount(session.user_info);
-        loadXtreamContent();
-        const status=document.getElementById('profile-server-status');
-        if(status) status.textContent='تم التحقق من الاشتراك';
-        if (!silent) showToast('تم تحديث المحتوى من خادم الاشتراك');
-        return true;
-      } catch(error) {
-        const retryable = isNetworkFailure(error);
-        const hasCache=!!(activeCredentials && retryable && restoreXtreamCache());
-        isOfflineCache=hasCache;
-        const note=document.getElementById('cache-status'); if(note) note.style.display=hasCache?'block':'none';
-        const status=document.getElementById('profile-server-status');
-        if(status) status.textContent=hasCache?'تعذر التحديث — بيانات سابقة':(retryable?'تعذر الاتصال بالخادم':'تعذر تحديث المحتوى');
-        if (hasCache) { renderCategories(); renderItems(); renderAudioSourcePicker(); }
-        if (!silent) showToast('فشل التحديث: ' + (error.message || 'تعذر الاتصال'));
-        return false;
-      }
+      if(!activeCredentials){if(!options.silent)showToast('سجّل الدخول أولاً');return false;}
+      if(!options.silent)refreshDownloadedCatalogs();
+      else Object.keys(CATALOG_SECTIONS).forEach(section=>{
+        if(catalogSyncStates[section]==='ready')startCatalogSync(section,{silent:true});
+      });
+      return true;
     }
 
     /**
@@ -2157,27 +2189,14 @@
       renderAudioSourcePicker();
 
       // 4. Bind Home Screen Action Cards
-      document.getElementById('card-channels').addEventListener('click', () => {
-        switchView('view-live');
-        // Always reset the preview when entering the Channels card from Home.
-        if (window.NativePlayback && typeof window.NativePlayback.stop === 'function') {
-          window.NativePlayback.stop();
-        }
-        if (videoPlaybackController) {
-          videoPlaybackController.currentItem = null;
-          videoPlaybackController.hidePlaybackControls();
-        }
-        const playerPanel = document.querySelector('.live-player-col');
-        if (playerPanel) playerPanel.classList.remove('has-active-playback');
-        setAppMode('live');
-      });
-      document.getElementById('card-movies').addEventListener('click', () => {
-        switchView('view-live');
-        setAppMode('movies');
-      });
-      document.getElementById('card-series').addEventListener('click', () => {
-        switchView('view-live');
-        setAppMode('series');
+      document.getElementById('card-channels').addEventListener('click', () => openCatalogSection('live'));
+      document.getElementById('card-movies').addEventListener('click', () => openCatalogSection('movies'));
+      document.getElementById('card-series').addEventListener('click', () => openCatalogSection('series'));
+      document.querySelectorAll('[data-catalog-retry]').forEach(button => {
+        button.addEventListener('click', event => {
+          event.preventDefault(); event.stopPropagation();
+          startCatalogSync(button.dataset.catalogRetry);
+        });
       });
 
       // 5. Explicit Back Button in Top Bar (Returns to Home!)
@@ -2194,12 +2213,10 @@
 
       // 7. Home Top Bar Buttons
       document.getElementById('btn-power').addEventListener('click', () => openModal('modal-power'));
-      document.getElementById('btn-refresh').addEventListener('click', refreshXtreamContent);
+      document.getElementById('btn-refresh').addEventListener('click', () => refreshXtreamContent());
       document.getElementById('btn-profile').addEventListener('click', () => openModal('modal-profile'));
       document.getElementById('btn-settings').addEventListener('click', () => openModal('modal-settings'));
-      document.getElementById('settings-refresh').addEventListener('click', () => {
-        refreshXtreamContent();
-      });
+      document.getElementById('settings-refresh').addEventListener('click', () => refreshXtreamContent());
       document.getElementById('settings-account').addEventListener('click', () => {
         closeAllModals();
         openModal('modal-profile');
@@ -2262,43 +2279,22 @@
       });
 
       try {
-        // Credentials are kept in the encrypted native vault and the last
-        // successfully loaded catalogue is already persisted in WebView storage.
-        // Restore the cached screen first; never block startup on provider HTTP calls.
-        const saved=parseNative(window.XtreamBridge.savedCredentials());
-        document.getElementById('login-server').value=saved.server || '';
-        document.getElementById('login-username').value=saved.username || '';
-        activeCredentials={server:saved.server,username:saved.username};
-        isOfflineCache=restoreXtreamCache();
-        const hasCompleteLocalCatalog=isOfflineCache;
+        const saved = parseNative(window.XtreamBridge.savedCredentials());
+        document.getElementById('login-server').value = saved.server || '';
+        document.getElementById('login-username').value = saved.username || '';
+        activeCredentials = {server:saved.server, username:saved.username};
         updateAccount({username:saved.username});
         document.getElementById('sonix-login-screen').classList.add('hidden');
-        renderCategories();
-        renderItems();
-        renderAudioSourcePicker();
-        const startupStatus=document.getElementById('profile-server-status');
-        if(startupStatus) startupStatus.textContent=hasCompleteLocalCatalog
-          ? 'تمت استعادة المحتوى المحفوظ محلياً'
-          : 'جارٍ إكمال المزامنة الأولى للمحتوى...';
-        // Only bootstrap when no complete local catalogue exists (e.g. first
-        // launch after upgrading an older build). Normal launches are offline-only.
-        if(!hasCompleteLocalCatalog) {
-          setTimeout(() => {
-            try {
-              loadXtreamContent();
-              if(startupStatus) startupStatus.textContent='تم تحميل المحتوى وحفظ المزامنة';
-            } catch(error) {
-              if(startupStatus) startupStatus.textContent='تعذر إكمال المزامنة الأولى';
-              showToast('تعذر تحميل المحتوى: ' + (error.message || 'تحقق من اتصال الإنترنت'));
-            }
-          }, 350);
-        }
+        prepareCatalogHome();
       } catch (_) {
-        activeCredentials=null;
+        activeCredentials = null;
         document.getElementById('sonix-login-screen').classList.remove('hidden');
         const firstLoginField = document.getElementById('login-server');
         if (firstLoginField && remoteNavigator) remoteNavigator.focusElement(firstLoginField);
       }
+
+      // Re-check at short intervals so each cached section refreshes once it reaches 24 hours.
+      setInterval(checkCatalogRefreshDue, 60000);
 
       // 10. Search Filters
       document.getElementById('cat-filter-input').addEventListener('input', (e) => {
@@ -2382,7 +2378,9 @@
       });
 
       // 12. Focus Channels Card Initially
-      const initialFocus = document.getElementById('login-server') || document.getElementById('card-channels');
+      const initialFocus = document.getElementById('sonix-login-screen').classList.contains('hidden')
+        ? document.getElementById('card-movies')
+        : document.getElementById('login-server');
       if (initialFocus && remoteNavigator) {
         remoteNavigator.focusElement(initialFocus);
       }

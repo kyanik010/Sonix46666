@@ -8,8 +8,14 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.webkit.JavascriptInterface
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
+import java.util.concurrent.atomic.AtomicBoolean
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -36,6 +42,20 @@ import javax.crypto.spec.SecretKeySpec
 class XtreamBridge(context: Context) {
     private val appContext = context.applicationContext
     private val vault = CredentialVault(appContext)
+    private val catalogExecutor = Executors.newFixedThreadPool(3)
+    private val catalogJobs = ConcurrentHashMap<String, Future<*>>()
+    private val catalogTokens = ConcurrentHashMap<String, AtomicBoolean>()
+    private val catalogConnections = ConcurrentHashMap<String, HttpURLConnection>()
+    @Volatile private var asyncResultHandler: ((String, String) -> Unit)? = null
+
+    fun setAsyncResultHandler(handler: ((String, String) -> Unit)?) { asyncResultHandler = handler }
+
+    fun shutdown() {
+        catalogTokens.values.forEach { it.set(true) }
+        catalogConnections.values.forEach { it.disconnect() }
+        catalogJobs.values.forEach { it.cancel(true) }
+        catalogExecutor.shutdownNow()
+    }
 
     @JavascriptInterface
     fun login(server: String, username: String, password: String): String {
@@ -105,6 +125,107 @@ class XtreamBridge(context: Context) {
         } catch (error: Throwable) {
             android.util.Log.e("SONIX", "Error in load($action)", error)
             errorResult(error)
+        }
+    }
+
+    @JavascriptInterface
+    fun loadSectionAsync(section: String, requestId: String) {
+        val id = requestId.trim()
+        if (id.isBlank() || id.length > 120) return
+        val actions = when (section) {
+            "live" -> "get_live_categories" to "get_live_streams"
+            "movies" -> "get_vod_categories" to "get_vod_streams"
+            "series" -> "get_series_categories" to "get_series"
+            else -> {
+                asyncResultHandler?.invoke(id, errorResult(IllegalArgumentException("قسم المزامنة غير صالح")))
+                return
+            }
+        }
+        val token = AtomicBoolean(false)
+        if (catalogTokens.putIfAbsent(id, token) != null) return
+        val task = FutureTask {
+            try {
+                val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
+                ensureCatalogRequestActive(token)
+                val categoriesBody = request(credentials.server, credentials.username, credentials.password,
+                    "player_api.php", actions.first, requestId = id, cancellation = token)
+                ensureCatalogRequestActive(token)
+                val itemsBody = request(credentials.server, credentials.username, credentials.password,
+                    "player_api.php", actions.second, requestId = id, cancellation = token)
+                ensureCatalogRequestActive(token)
+                val categories = JSONArray(categoriesBody)
+                val items = JSONArray(itemsBody)
+                require(items.length() > 0) { "لم يُرجع الخادم أي عناصر لهذا القسم؛ احتفظنا بالبيانات السابقة" }
+                val payload = JSONObject().put("version", 2).put("section", section)
+                    .put("server", credentials.server).put("username", credentials.username)
+                    .put("savedAt", System.currentTimeMillis()).put("categories", categories).put("items", items)
+                persistSectionCache(credentials.server, credentials.username, section, payload)
+                ensureCatalogRequestActive(token)
+                val response = JSONObject().put("success", true).put("section", section).put("data", payload).toString()
+                if (!token.get()) asyncResultHandler?.invoke(id, response)
+            } catch (error: Throwable) {
+                if (!token.get()) asyncResultHandler?.invoke(id, errorResult(error))
+            } finally {
+                catalogJobs.remove(id)
+                catalogConnections.remove(id)
+                catalogTokens.remove(id, token)
+            }
+        }
+        catalogJobs[id] = task
+        catalogExecutor.execute(task)
+    }
+
+    @JavascriptInterface
+    fun cancelSectionLoad(requestId: String) {
+        val id = requestId.trim()
+        catalogTokens[id]?.set(true)
+        catalogConnections.remove(id)?.disconnect()
+        catalogJobs.remove(id)?.cancel(true)
+        catalogTokens.remove(id)
+    }
+
+    @JavascriptInterface
+    fun loadCachedSection(section: String): String {
+        return try {
+            require(section in setOf("live", "movies", "series")) { "قسم التخزين غير صالح" }
+            val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
+            val file = sectionCacheFile(credentials.server, credentials.username, section)
+            require(file.isFile && file.length() > 0L) { "لا توجد بيانات محفوظة لهذا القسم" }
+            val cached = JSONObject(file.readText(Charsets.UTF_8))
+            require(cached.optInt("version") == 2 && cached.optString("section") == section &&
+                cached.optString("server") == credentials.server && cached.optString("username") == credentials.username &&
+                cached.optJSONArray("categories") != null && cached.optJSONArray("items") != null) {
+                "بيانات القسم المحفوظة غير مكتملة"
+            }
+            JSONObject().put("success", true).put("section", section).put("savedAt", cached.optLong("savedAt"))
+                .put("categories", cached.getJSONArray("categories")).put("items", cached.getJSONArray("items")).toString()
+        } catch (error: Throwable) { errorResult(error) }
+    }
+
+    private fun ensureCatalogRequestActive(token: AtomicBoolean) {
+        if (token.get() || Thread.currentThread().isInterrupted) throw InterruptedException("تم إلغاء تحميل القسم")
+    }
+
+    private fun sectionCacheFile(server: String, username: String, section: String): File {
+        val identity = "$server|$username".toByteArray(Charsets.UTF_8)
+        val key = MessageDigest.getInstance("SHA-256").digest(identity).joinToString("") { "%02x".format(it) }
+        return File(File(File(appContext.filesDir, "sonix_catalog_v2"), key), "$section.json")
+    }
+
+    private fun persistSectionCache(server: String, username: String, section: String, payload: JSONObject) {
+        val target = sectionCacheFile(server, username, section)
+        val parent = target.parentFile ?: throw IllegalStateException("تعذر تحديد مجلد التخزين")
+        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("تعذر إنشاء مجلد التخزين")
+        val temp = File(parent, "$section.json.tmp")
+        try {
+            FileOutputStream(temp).use { stream ->
+                stream.write(payload.toString().toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+            }
+            android.system.Os.rename(temp.absolutePath, target.absolutePath)
+        } catch (error: Throwable) {
+            temp.delete()
+            throw error
         }
     }
 
@@ -215,6 +336,7 @@ class XtreamBridge(context: Context) {
         File(appContext.filesDir, "sonix_provider_cache_v1.json").delete()
         File(appContext.filesDir, "sonix_provider_cache_v1.json.bak").delete()
         File(appContext.filesDir, "sonix_provider_cache_v1.json.new").delete()
+        File(appContext.filesDir, "sonix_catalog_v2").deleteRecursively()
     }
 
     @JavascriptInterface
@@ -270,7 +392,9 @@ class XtreamBridge(context: Context) {
         password: String,
         endpoint: String,
         action: String? = null,
-        extra: Map<String, String> = emptyMap()
+        extra: Map<String, String> = emptyMap(),
+        requestId: String? = null,
+        cancellation: AtomicBoolean? = null
     ): String {
         val builder = Uri.parse("$server/$endpoint").buildUpon()
             .appendQueryParameter("username", username)
@@ -284,7 +408,9 @@ class XtreamBridge(context: Context) {
 
         while (redirects < maxRedirects) {
             val urlObj = URL(currentUrl)
+            if (cancellation?.get() == true || Thread.currentThread().isInterrupted) throw InterruptedException("تم إلغاء تحميل القسم")
             val connection = urlObj.openConnection() as HttpURLConnection
+            if (requestId != null) catalogConnections[requestId] = connection
             connection.requestMethod = "GET"
             connection.connectTimeout = 20_000
             connection.readTimeout = 40_000
@@ -328,6 +454,7 @@ class XtreamBridge(context: Context) {
                 if (body.isBlank()) throw IllegalStateException("أعاد الخادم استجابة فارغة")
                 return body
             } finally {
+                if (requestId != null) catalogConnections.remove(requestId, connection)
                 connection.disconnect()
             }
         }
