@@ -1622,6 +1622,7 @@
         if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
         loginScreen.classList.add('hidden');
         switchView('view-home');
+        if (remoteNavigator) remoteNavigator.focusElement(document.getElementById('card-movies'));
         window.setTimeout(prepareCatalogHome, 0);
         document.getElementById('login-password').value='';
         const settingsPassword=document.getElementById('iptv-password'); if(settingsPassword) settingsPassword.value='';
@@ -1640,6 +1641,7 @@
           if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
           loginScreen.classList.add('hidden');
           switchView('view-home');
+          if (remoteNavigator) remoteNavigator.focusElement(document.getElementById('card-movies'));
           showToast('تعذر الاتصال؛ يتم عرض آخر بيانات مخزنة');
           renderCategories();renderItems();renderAudioSourcePicker();
         } else {
@@ -1730,7 +1732,7 @@
       if(!activeCredentials){if(!options.silent)showToast('سجّل الدخول أولاً');return false;}
       if(!options.silent)refreshDownloadedCatalogs();
       else Object.keys(CATALOG_SECTIONS).forEach(section=>{
-        if(catalogSyncStates[section]==='ready')startCatalogSync(section,{silent:true});
+        if(catalogSyncStates[section]==='ready'||catalogSyncStates[section]==='cached')startCatalogSync(section,{silent:true});
       });
       return true;
     }
