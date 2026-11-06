@@ -1535,12 +1535,17 @@
       return true;
     }
 
+    function refreshLastCatalogRequestId(){
+      lastCatalogRequestId=null;
+      for(const request of catalogSyncRequests.values())lastCatalogRequestId=request.requestId;
+    }
+
     window.onXtreamSectionLoaded=function(requestId,rawResult){
       let response;try{response=JSON.parse(rawResult);}catch(_){response={success:false,error:'استجابة غير مفهومة من خدمة المزامنة'};}
       let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===requestId){section=key;break;}
       if(!section)return;
       const request=catalogSyncRequests.get(section);catalogSyncRequests.delete(section);
-      if(lastCatalogRequestId===requestId)lastCatalogRequestId=null;
+      if(lastCatalogRequestId===requestId)refreshLastCatalogRequestId();
       if(response.success&&response.data){
         try{applyCatalogSection(section,response.data);setCatalogCardState(section,request.silent&&catalogSyncStates[section]==='cached'?'cached':'ready');if(!request.silent)showToast('اكتملت مزامنة '+CATALOG_SECTIONS[section].label);}
         catch(error){if(!request.silent)setCatalogCardState(section,'error',error.message);}
@@ -1555,7 +1560,7 @@
       let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===lastCatalogRequestId){section=key;break;}
       if(!section){lastCatalogRequestId=null;return false;}
       const requestId=lastCatalogRequestId,request=catalogSyncRequests.get(section);
-      catalogSyncRequests.delete(section);lastCatalogRequestId=null;
+      catalogSyncRequests.delete(section);refreshLastCatalogRequestId();
       try{window.XtreamBridge.cancelSectionLoad(requestId);}catch(_){}
       if(request&&!request.silent)setCatalogCardState(section,'missing');
       showToast('تم إلغاء تحميل '+CATALOG_SECTIONS[section].label);return true;
