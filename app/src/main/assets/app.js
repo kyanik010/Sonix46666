@@ -1028,6 +1028,45 @@
         const inChannels = current.closest('.channels-list');
         const inPlayerCol = current.closest('.live-player-col');
 
+        // Movie/series cards form a three-column grid. Resolve horizontal DPAD
+        // movement inside that grid before considering transitions to other
+        // application columns. Use rendered geometry so RTL and screen sizing
+        // are handled by the actual visual positions rather than DOM assumptions.
+        const mediaGrid = current.closest('.channels-list.media-grid');
+        if (mediaGrid && (direction === 'left' || direction === 'right')) {
+          const currentRect = current.getBoundingClientRect();
+          const currentCenterX = currentRect.left + currentRect.width / 2;
+          const currentCenterY = currentRect.top + currentRect.height / 2;
+          const candidates = Array.from(mediaGrid.querySelectorAll('.channel-row.focusable:not([disabled])'))
+            .filter(target => target !== current && target.getClientRects().length > 0)
+            .map(target => {
+              const rect = target.getBoundingClientRect();
+              const centerX = rect.left + rect.width / 2;
+              const centerY = rect.top + rect.height / 2;
+              const verticalOverlap = Math.max(0,
+                Math.min(currentRect.bottom, rect.bottom) - Math.max(currentRect.top, rect.top));
+              const isInRequestedDirection = direction === 'left'
+                ? centerX < currentCenterX
+                : centerX > currentCenterX;
+              return {
+                target,
+                horizontalGap: Math.abs(centerX - currentCenterX),
+                verticalDistance: Math.abs(centerY - currentCenterY),
+                verticalOverlap,
+                isInRequestedDirection
+              };
+            })
+            .filter(candidate => candidate.isInRequestedDirection && candidate.verticalOverlap > 0)
+            .sort((a, b) =>
+              (a.horizontalGap + a.verticalDistance * 2) -
+              (b.horizontalGap + b.verticalDistance * 2));
+
+          if (candidates.length) {
+            this.focusElement(candidates[0].target);
+            return;
+          }
+        }
+
         // 1. Column-to-column transition in Unified Content Browser (RTL-aware):
         if (direction === 'left') {
           // In RTL layout: Left moves from Sidebar -> Categories -> Channels -> Player
