@@ -1531,7 +1531,7 @@
       catalogSyncRequests.set(section,{requestId,silent});lastCatalogRequestId=requestId;catalogAutoRefreshAttempt[section]=Date.now();
       if(!silent)setCatalogCardState(section,'loading');
       try{window.XtreamBridge.loadSectionAsync(section,requestId);}
-      catch(error){catalogSyncRequests.delete(section);if(!silent)setCatalogCardState(section,'error',error.message||'تعذر بدء التحميل');return false;}
+      catch(error){catalogSyncRequests.delete(section);refreshLastCatalogRequestId();if(!silent)setCatalogCardState(section,'error',error.message||'تعذر بدء التحميل');return false;}
       return true;
     }
 
@@ -1558,7 +1558,7 @@
     function cancelActiveCatalogSync(){
       if(!lastCatalogRequestId)return false;
       let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===lastCatalogRequestId){section=key;break;}
-      if(!section){lastCatalogRequestId=null;return false;}
+      if(!section){refreshLastCatalogRequestId();return lastCatalogRequestId?cancelActiveCatalogSync():false;}
       const requestId=lastCatalogRequestId,request=catalogSyncRequests.get(section);
       catalogSyncRequests.delete(section);refreshLastCatalogRequestId();
       try{window.XtreamBridge.cancelSectionLoad(requestId);}catch(_){}
