@@ -9,6 +9,7 @@ on:
       - sonix-tv-only
       - feature/stremio-addons-subtitle-system
       - sonix-tv-vip
+      # Keep the SONIX TV VIP branch covered by the Android build and test workflow.
   workflow_dispatch:
 
 permissions:
