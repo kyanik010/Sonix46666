@@ -153,15 +153,16 @@ class XtreamBridge(context: Context) {
                 val itemsBody = request(credentials.server, credentials.username, credentials.password,
                     "player_api.php", actions.second, requestId = id, cancellation = token)
                 ensureCatalogRequestActive(token)
-                val categories = JSONArray(categoriesBody)
-                val items = JSONArray(itemsBody)
-                require(items.length() > 0) { "لم يُرجع الخادم أي عناصر لهذا القسم؛ احتفظنا بالبيانات السابقة" }
-                val payload = JSONObject().put("version", 2).put("section", section)
-                    .put("server", credentials.server).put("username", credentials.username)
-                    .put("savedAt", System.currentTimeMillis()).put("categories", categories).put("items", items)
+                validateCatalogSection(section, categoriesBody, itemsBody)
+                val savedAt = System.currentTimeMillis()
+                // Keep provider arrays as validated raw JSON to avoid a second large object graph.
+                val payload = "{\"success\":true,\"version\":2,\"section\":${JSONObject.quote(section)}," +
+                    "\"server\":${JSONObject.quote(credentials.server)},\"username\":${JSONObject.quote(credentials.username)}," +
+                    "\"savedAt\":$savedAt,\"categories\":$categoriesBody,\"items\":$itemsBody}"
+                ensureCatalogRequestActive(token)
                 persistSectionCache(credentials.server, credentials.username, section, payload)
                 ensureCatalogRequestActive(token)
-                val response = JSONObject().put("success", true).put("section", section).put("data", payload).toString()
+                val response = "{\"success\":true,\"section\":${JSONObject.quote(section)},\"data\":$payload}"
                 if (!token.get()) asyncResultHandler?.invoke(id, response)
             } catch (error: Throwable) {
                 if (!token.get()) asyncResultHandler?.invoke(id, errorResult(error))
@@ -191,15 +192,31 @@ class XtreamBridge(context: Context) {
             val credentials = vault.read() ?: throw IllegalStateException("سجّل الدخول أولاً")
             val file = sectionCacheFile(credentials.server, credentials.username, section)
             require(file.isFile && file.length() > 0L) { "لا توجد بيانات محفوظة لهذا القسم" }
-            val cached = JSONObject(file.readText(Charsets.UTF_8))
-            require(cached.optInt("version") == 2 && cached.optString("section") == section &&
-                cached.optString("server") == credentials.server && cached.optString("username") == credentials.username &&
-                cached.optJSONArray("categories") != null && cached.optJSONArray("items") != null) {
+            val cached = file.readText(Charsets.UTF_8)
+            val expectedPrefix = "{\"success\":true,\"version\":2,\"section\":${JSONObject.quote(section)}," +
+                "\"server\":${JSONObject.quote(credentials.server)},\"username\":${JSONObject.quote(credentials.username)},\"savedAt\":"
+            require(cached.startsWith(expectedPrefix) && cached.contains("\"categories\":[") && cached.contains("\"items\":[")) {
                 "بيانات القسم المحفوظة غير مكتملة"
             }
-            JSONObject().put("success", true).put("section", section).put("savedAt", cached.optLong("savedAt"))
-                .put("categories", cached.getJSONArray("categories")).put("items", cached.getJSONArray("items")).toString()
+            cached
         } catch (error: Throwable) { errorResult(error) }
+    }
+
+    private fun validateCatalogSection(section: String, categoriesBody: String, itemsBody: String) {
+        val categories = JSONArray(categoriesBody)
+        val items = JSONArray(itemsBody)
+        require(items.length() > 0) { "لم يُرجع الخادم أي عناصر لهذا القسم؛ احتفظنا بالبيانات السابقة" }
+        val idField = if (section == "series") "series_id" else "stream_id"
+        for (index in 0 until items.length()) {
+            val item = items.optJSONObject(index) ?: throw IllegalArgumentException("عنصر غير صالح في قائمة المحتوى")
+            val itemId = item.optString(idField).trim()
+            require(itemId.isNotEmpty() && itemId != "null") { "معرّف عنصر غير صالح في القسم" }
+        }
+        for (index in 0 until categories.length()) {
+            val category = categories.optJSONObject(index) ?: throw IllegalArgumentException("تصنيف غير صالح في قائمة المحتوى")
+            val categoryId = category.optString("category_id").trim()
+            require(categoryId.isNotEmpty() && categoryId != "null") { "معرّف تصنيف غير صالح في القسم" }
+        }
     }
 
     private fun ensureCatalogRequestActive(token: AtomicBoolean) {
@@ -212,14 +229,14 @@ class XtreamBridge(context: Context) {
         return File(File(File(appContext.filesDir, "sonix_catalog_v2"), key), "$section.json")
     }
 
-    private fun persistSectionCache(server: String, username: String, section: String, payload: JSONObject) {
+    private fun persistSectionCache(server: String, username: String, section: String, payload: String) {
         val target = sectionCacheFile(server, username, section)
         val parent = target.parentFile ?: throw IllegalStateException("تعذر تحديد مجلد التخزين")
         if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("تعذر إنشاء مجلد التخزين")
         val temp = File(parent, "$section.json.tmp")
         try {
             FileOutputStream(temp).use { stream ->
-                stream.write(payload.toString().toByteArray(Charsets.UTF_8))
+                stream.write(payload.toByteArray(Charsets.UTF_8))
                 stream.fd.sync()
             }
             android.system.Os.rename(temp.absolutePath, target.absolutePath)

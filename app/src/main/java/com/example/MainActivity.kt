@@ -196,10 +196,9 @@ class MainActivity : ComponentActivity() {
 
             xtreamBridge.setAsyncResultHandler { requestId, result ->
                 val quotedId = JSONObject.quote(requestId)
-                val quotedResult = JSONObject.quote(result)
                 wv.post {
                     wv.evaluateJavascript(
-                        "window.onXtreamSectionLoaded && window.onXtreamSectionLoaded($quotedId, $quotedResult)",
+                        "window.onXtreamSectionLoaded && window.onXtreamSectionLoaded($quotedId, $result)",
                         null
                     )
                 }

@@ -1541,7 +1541,7 @@
     }
 
     window.onXtreamSectionLoaded=function(requestId,rawResult){
-      let response;try{response=JSON.parse(rawResult);}catch(_){response={success:false,error:'استجابة غير مفهومة من خدمة المزامنة'};}
+      let response;try{response=typeof rawResult==='string'?JSON.parse(rawResult):rawResult;}catch(_){response={success:false,error:'استجابة غير مفهومة من خدمة المزامنة'};}
       let section=null;for(const [key,value] of catalogSyncRequests.entries())if(value.requestId===requestId){section=key;break;}
       if(!section)return;
       const request=catalogSyncRequests.get(section);catalogSyncRequests.delete(section);
