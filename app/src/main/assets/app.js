@@ -1526,7 +1526,12 @@
 
     function startCatalogSync(section,options={}){
       const config=CATALOG_SECTIONS[section];
-      if(!config||!activeCredentials||!window.XtreamBridge||catalogSyncRequests.has(section))return false;
+      if(!config||!activeCredentials||!window.XtreamBridge)return false;
+      if(catalogSyncRequests.has(section)){
+        const active=catalogSyncRequests.get(section);
+        if(active&&active.silent&&!options.silent){active.silent=false;setCatalogCardState(section,'loading');}
+        return false;
+      }
       const silent=Boolean(options.silent),requestId='catalog-'+section+'-'+(++catalogRequestSequence)+'-'+Date.now();
       catalogSyncRequests.set(section,{requestId,silent});lastCatalogRequestId=requestId;catalogAutoRefreshAttempt[section]=Date.now();
       if(!silent)setCatalogCardState(section,'loading');
