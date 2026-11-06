@@ -98,7 +98,7 @@
     let liveCategories = [], liveChannels = [];
     let movieCategories = [], movies = [];
     let seriesCategories = [], series = [];
-    let activeCredentials = null, accountInfo = null, isOfflineCache = false;
+    let activeCredentials = null, accountInfo = null;
     const FAVORITES_STORAGE_KEY = 'sonix_favorites_v2';
     function readSavedFavorites() {
       try {
@@ -1581,7 +1581,7 @@
           catch(_){setCatalogCardState(section,'missing');}
         }else setCatalogCardState(section,'missing');
       });
-      isOfflineCache=hasCached;return hasCached;
+      return hasCached;
     }
 
     function checkCatalogRefreshDue(){
@@ -1618,7 +1618,6 @@
       const pi=document.getElementById('profile-user-id'); if(pi) pi.textContent=accountInfo.user_id || accountInfo.username || '—';
       const pe=document.getElementById('profile-expiry'); if(pe) pe.textContent=exp>0?new Date(exp*1000).toLocaleDateString('ar'):'غير محدد';
       const pp=document.getElementById('profile-package'); if(pp) pp.textContent=accountInfo.status || '—';
-      const ps=document.getElementById('profile-server-status'); if(ps) ps.textContent=isOfflineCache?'بيانات مخزنة سابقاً':'تم التحقق من الاشتراك';
     }
     function performXtreamLogin(server,username,password,offlineFallback) {
       const button=document.getElementById('login-submit');
@@ -1626,7 +1625,6 @@
       try {
         const result=parseNative(window.XtreamBridge.login(server,username,password));
         activeCredentials={server:server.trim().replace(/\/+$/,''),username:result.user_info.username || username};
-        isOfflineCache=false;
         updateAccount(result.user_info);
         const loginScreen = document.getElementById('sonix-login-screen');
         if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
@@ -1645,7 +1643,6 @@
           } catch (_) {}
         }
         if(offlineFallback && isNetworkFailure(error) && activeCredentials && restoreXtreamCache()) {
-          isOfflineCache=true;
           updateAccount({username:activeCredentials.username});
           const loginScreen = document.getElementById('sonix-login-screen');
           if (loginScreen.contains(document.activeElement)) document.activeElement.blur();
